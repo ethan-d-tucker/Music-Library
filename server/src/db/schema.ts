@@ -48,4 +48,17 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(artist, album);
     CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(download_status);
   `)
+
+  // Migration: add lyrics columns
+  const cols = db.pragma('table_info(tracks)') as { name: string }[]
+  const colNames = new Set(cols.map(c => c.name))
+  if (!colNames.has('lyrics_plain')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN lyrics_plain TEXT DEFAULT ''")
+  }
+  if (!colNames.has('lyrics_synced')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN lyrics_synced TEXT DEFAULT ''")
+  }
+  if (!colNames.has('lyrics_status')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN lyrics_status TEXT DEFAULT ''")
+  }
 }

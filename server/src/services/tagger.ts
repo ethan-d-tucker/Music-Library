@@ -8,6 +8,7 @@ export interface TagData {
   partOfSet?: string
   albumArtUrl?: string
   albumArtist?: string
+  lyrics?: string
 }
 
 export async function tagFile(filePath: string, tags: TagData): Promise<void> {
@@ -35,6 +36,13 @@ export async function tagFile(filePath: string, tags: TagData): Promise<void> {
       }
     } catch {
       // Album art fetch failed, skip it
+    }
+  }
+
+  if (tags.lyrics) {
+    id3Tags.unsynchronisedLyrics = {
+      language: 'eng',
+      text: tags.lyrics,
     }
   }
 

@@ -23,7 +23,7 @@ cd client && npm run build  # Production build
 - `server/src/config.ts` — Environment config, binary discovery (yt-dlp, ffmpeg, deno)
 - `server/src/db/schema.ts` — SQLite schema (tracks, playlists, playlist_tracks, config)
 - `server/src/routes/` — API routes (library, playlists, spotify, download)
-- `server/src/services/` — Business logic (organizer, tagger, m3u)
+- `server/src/services/` — Business logic (organizer, tagger, lyrics, m3u)
 - `client/src/lib/store.ts` — Zustand store (page nav, library tab, selections)
 - `client/src/lib/api.ts` — Typed API wrappers for all server endpoints
 - `client/src/components/Layout.tsx` — Shell layout with sidebar nav (library sub-tabs rendered here)
@@ -62,6 +62,10 @@ cd client && npm run build  # Production build
 - 1.5s delay between downloads to avoid YouTube throttling
 - Compilation albums (various artists) use `album_artist` for folder organization and ID3 TPE2 tag
 - File organization: `{album_artist or first artist}/{album}/{tracknum title}.mp3`
+- Lyrics fetched from LRCLIB (free, no API key) during download and backfill
+- Plain lyrics embedded as ID3 USLT tags; synced lyrics written as `.lrc` sidecar files
+- Live/bonus/demo track titles are cleaned to match studio lyrics (fallback search)
+- Backfill endpoint: `POST /api/library/backfill-lyrics` with SSE progress at `GET /api/library/backfill-lyrics/:jobId`
 
 ## Conventions
 
@@ -69,4 +73,5 @@ cd client && npm run build  # Production build
 - Server imports use `.js` extensions (ESM convention)
 - Validation with Zod
 - CSS uses CSS custom properties (`var(--color-*)`) for theming
+- Mobile layout uses `viewport-fit=cover` + `env(safe-area-inset-bottom)` for iOS home bar spacing
 - No test framework currently configured

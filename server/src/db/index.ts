@@ -40,6 +40,9 @@ export interface TrackRow {
   album_art_url: string
   download_status: string
   error_message: string
+  lyrics_plain: string
+  lyrics_synced: string
+  lyrics_status: string
   created_at: string
   updated_at: string
 }
@@ -207,6 +210,16 @@ export function getPlaylistTracks(playlistId: number): TrackRow[] {
 export function addTrackToPlaylist(playlistId: number, trackId: number, position: number): void {
   db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)')
     .run(playlistId, trackId, position)
+}
+
+export function updateTrackLyrics(id: number, plain: string, synced: string, status: string): void {
+  db.prepare("UPDATE tracks SET lyrics_plain = ?, lyrics_synced = ?, lyrics_status = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(plain, synced, status, id)
+}
+
+export function getTracksNeedingLyrics(): TrackRow[] {
+  return db.prepare("SELECT * FROM tracks WHERE download_status = 'complete' AND lyrics_status = '' ORDER BY artist, album, track_number")
+    .all() as TrackRow[]
 }
 
 export function getLibraryStats(): { tracks: number; artists: number; albums: number; downloaded: number; pending: number; failed: number } {

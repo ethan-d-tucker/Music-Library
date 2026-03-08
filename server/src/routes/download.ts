@@ -3,9 +3,10 @@ import { searchYouTube, searchYouTubePlaylists, downloadAudio, expandPlaylist } 
 import { findBestMatch } from '../services/matcher.js'
 import { tagFile } from '../services/tagger.js'
 import { getTrackPath, getAbsolutePath, ensureDirectories } from '../services/organizer.js'
-import { getTrackById, getPendingTracks, updateTrackStatus, insertTrack, type TrackRow } from '../db/index.js'
+import { getTrackById, getPendingTracks, updateTrackStatus, updateTrackLyrics, insertTrack, type TrackRow } from '../db/index.js'
 import { triggerNavidromeScan } from '../services/navidrome.js'
 import { normalizeFile } from '../services/normalizer.js'
+import { fetchLyrics, writeLrcFile } from '../services/lyrics.js'
 import { MUSIC_DIR } from '../config.js'
 
 const router = Router()
@@ -69,6 +70,29 @@ async function downloadAndTagTrack(track: TrackRow): Promise<void> {
   // Download
   await downloadAudio(match.result.url, absolutePath)
 
+  // Fetch lyrics
+  let lyricsPlain = ''
+  let lyricsSynced = ''
+  let lyricsStatus = 'not_found'
+  try {
+    const lyrics = await fetchLyrics({
+      artist: track.artist,
+      title: track.title,
+      album: track.album,
+      durationMs: track.duration_ms,
+    })
+    if (lyrics) {
+      lyricsPlain = lyrics.plain
+      lyricsSynced = lyrics.synced
+      lyricsStatus = 'found'
+      if (lyrics.synced) {
+        writeLrcFile(absolutePath, lyrics.synced)
+      }
+    }
+  } catch {
+    lyricsStatus = 'error'
+  }
+
   // Tag
   await tagFile(absolutePath, {
     title: track.title,
@@ -78,6 +102,7 @@ async function downloadAndTagTrack(track: TrackRow): Promise<void> {
     partOfSet: String(track.disc_number),
     albumArtUrl: track.album_art_url,
     albumArtist: track.album_artist || undefined,
+    lyrics: lyricsPlain || undefined,
   })
 
   // Normalize artist name if needed
@@ -88,6 +113,7 @@ async function downloadAndTagTrack(track: TrackRow): Promise<void> {
     file_path: relativePath,
     youtube_id: match.result.id,
   })
+  updateTrackLyrics(track.id, lyricsPlain, lyricsSynced, lyricsStatus)
 }
 
 router.post('/track/:id', async (req, res) => {
@@ -124,12 +150,30 @@ router.post('/url', async (req, res) => {
     ensureDirectories(relativePath)
 
     await downloadAudio(url, absolutePath)
-    await tagFile(absolutePath, { title, artist, album: album || '', trackNumber: '0' })
+
+    // Fetch lyrics (best-effort)
+    let urlLyricsPlain = ''
+    let urlLyricsSynced = ''
+    let urlLyricsStatus = 'not_found'
+    try {
+      const lyrics = await fetchLyrics({ artist, title, album: album || '', durationMs: 0 })
+      if (lyrics) {
+        urlLyricsPlain = lyrics.plain
+        urlLyricsSynced = lyrics.synced
+        urlLyricsStatus = 'found'
+        if (lyrics.synced) writeLrcFile(absolutePath, lyrics.synced)
+      }
+    } catch {
+      urlLyricsStatus = 'error'
+    }
+
+    await tagFile(absolutePath, { title, artist, album: album || '', trackNumber: '0', lyrics: urlLyricsPlain || undefined })
 
     updateTrackStatus(trackId, 'complete', {
       file_path: relativePath,
       youtube_id: new URL(url).searchParams.get('v') || '',
     })
+    updateTrackLyrics(trackId, urlLyricsPlain, urlLyricsSynced, urlLyricsStatus)
 
     await triggerNavidromeScan()
     res.json({ success: true, track: getTrackById(trackId) })
