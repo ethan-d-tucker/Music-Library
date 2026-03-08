@@ -100,11 +100,18 @@ async function spotifyGet<T>(endpoint: string, retries = 3): Promise<T> {
   const token = await getAccessToken()
   const res = await fetch(`${SPOTIFY_API}${endpoint}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10000),
   })
-  if (res.status === 429 && retries > 0) {
+  if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10)
-    await new Promise(r => setTimeout(r, retryAfter * 1000))
-    return spotifyGet<T>(endpoint, retries - 1)
+    if (retryAfter > 30) {
+      throw new Error(`Rate limited for ${retryAfter}s — try again later`)
+    }
+    if (retries > 0) {
+      console.log(`\n  Rate limited, waiting ${retryAfter}s...`)
+      await new Promise(r => setTimeout(r, retryAfter * 1000))
+      return spotifyGet<T>(endpoint, retries - 1)
+    }
   }
   if (!res.ok) throw new Error(`Spotify API error: ${res.status} ${await res.text()}`)
   return res.json() as Promise<T>
@@ -403,6 +410,17 @@ export async function getTopArtists(timeRange: TimeRange, limit = 50): Promise<S
     imageUrl: a.images?.[0]?.url || '',
     popularity: a.popularity,
   }))
+}
+
+export async function searchArtist(name: string): Promise<SpotifyArtist | null> {
+  const data = await spotifyGet<{
+    artists: { items: { id: string; name: string; images: { url: string }[]; popularity: number }[] }
+  }>(`/search?type=artist&q=${encodeURIComponent(name)}&limit=5`)
+
+  const match = data.artists.items.find(a => a.name.toLowerCase() === name.toLowerCase())
+  const best = match || data.artists.items[0]
+  if (!best) return null
+  return { id: best.id, name: best.name, imageUrl: best.images?.[0]?.url || '', popularity: best.popularity }
 }
 
 export async function getArtistAlbums(artistId: string): Promise<SpotifyAlbum[]> {

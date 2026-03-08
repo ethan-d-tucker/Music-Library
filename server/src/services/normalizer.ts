@@ -160,7 +160,7 @@ function parsePathMetadata(filePath: string): { artist: string; album: string; t
 }
 
 // Read existing tags from a FLAC file using ffprobe
-async function readFlacTags(filePath: string): Promise<{ artist?: string; album?: string; title?: string; track?: string }> {
+export async function readFlacTags(filePath: string): Promise<{ artist?: string; album?: string; title?: string; track?: string; albumArtist?: string }> {
   try {
     const { stdout } = await execFileAsync(ffprobePath, [
       '-v', 'quiet', '-print_format', 'json', '-show_format', filePath
@@ -172,6 +172,7 @@ async function readFlacTags(filePath: string): Promise<{ artist?: string; album?
       album: tags.ALBUM || tags.album,
       title: tags.TITLE || tags.title,
       track: tags.TRACK || tags.track,
+      albumArtist: tags.ALBUMARTIST || tags.albumartist || tags.ALBUM_ARTIST || tags.album_artist || tags['ALBUM ARTIST'] || tags['album artist'],
     }
   } catch {
     return {}
@@ -179,15 +180,18 @@ async function readFlacTags(filePath: string): Promise<{ artist?: string; album?
 }
 
 // Write tags to a FLAC file using ffmpeg (copies audio, replaces metadata)
-async function writeFlacTags(filePath: string, tags: { artist: string; album: string; title: string; trackNumber: number }): Promise<void> {
+export async function writeFlacTags(filePath: string, tags: { artist: string; album: string; title: string; trackNumber: number; albumArtist?: string }): Promise<void> {
   const tmpPath = filePath + '.tmp.' + Date.now() + path.extname(filePath)
   const args = [
     '-y', '-i', filePath,
-    '-map', '0', '-c', 'copy',
+    '-map', '0', '-map_metadata', '-1', '-c', 'copy',
     '-metadata', `ARTIST=${tags.artist}`,
     '-metadata', `ALBUM=${tags.album}`,
     '-metadata', `TITLE=${tags.title}`,
   ]
+  if (tags.albumArtist) {
+    args.push('-metadata', `ALBUMARTIST=${tags.albumArtist}`)
+  }
   if (tags.trackNumber > 0) {
     args.push('-metadata', `TRACKNUMBER=${tags.trackNumber}`)
   }
@@ -201,9 +205,12 @@ async function writeFlacTags(filePath: string, tags: { artist: string; album: st
 }
 
 // Write tags to an MP3 file and normalize artist name
-function writeMp3Tags(filePath: string, updates: { artist?: string }): void {
-  if (updates.artist) {
-    NodeID3.update({ artist: updates.artist }, filePath)
+export function writeMp3Tags(filePath: string, updates: { artist?: string; albumArtist?: string }): void {
+  const id3Updates: Record<string, string> = {}
+  if (updates.artist) id3Updates.artist = updates.artist
+  if (updates.albumArtist) id3Updates.performerInfo = updates.albumArtist
+  if (Object.keys(id3Updates).length > 0) {
+    NodeID3.update(id3Updates, filePath)
   }
 }
 

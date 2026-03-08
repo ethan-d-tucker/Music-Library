@@ -1,207 +1,321 @@
 /**
- * Import top Spotify music into the library.
+ * Import specific artists' studio albums into the library using MusicBrainz.
  *
- * Phase 1: Top tracks → import their full albums (no orphan singles)
- * Phase 2: Top artists → import their discographies
- * Capped at ~10GB estimated size.
+ * No Spotify API needed — uses MusicBrainz for metadata and
+ * Cover Art Archive for album art. Only imports studio albums
+ * (no compilations, singles, or EPs).
  *
  * Usage: cd server && npx tsx scripts/top-music.ts
  */
 
-import {
-  getTopTracks,
-  getTopArtists,
-  getArtistAlbums,
-  getAlbumTracks,
-  isConnected,
-  type SpotifyTrack,
-  type TimeRange,
-} from '../src/services/spotify.js'
 import { insertTrack, getLibraryStats } from '../src/db/index.js'
 import db from '../src/db/index.js'
 
-const MAX_SIZE_GB = 10
-const AVG_TRACK_SIZE_MB = 5
-const MAX_NEW_TRACKS = Math.floor((MAX_SIZE_GB * 1024) / AVG_TRACK_SIZE_MB)
+const USER_AGENT = 'MusicLibraryImporter/1.0 (local)'
 
-let totalImported = 0
-let totalSkipped = 0
+// --- CONFIGURE WHAT TO IMPORT ---
 
-function progress(phase: string, detail: string) {
-  const estGB = (totalImported * AVG_TRACK_SIZE_MB / 1024).toFixed(1)
-  process.stdout.write(`\r[${phase}] ${detail} | ${totalImported} tracks imported | ~${estGB} GB   `)
+interface ArtistEntry {
+  name: string
+  priorityAlbums?: string[] // import these first
 }
 
-function progressLine(msg: string) {
-  process.stdout.write('\n')
-  console.log(msg)
+const ARTISTS: ArtistEntry[] = [
+  { name: 'Merle Haggard', priorityAlbums: ['Down Every Road'] },
+  { name: 'Jason Isbell' },
+  { name: 'Turnpike Troubadours' },
+  { name: 'The Avett Brothers' },
+  { name: 'Chappell Roan' },
+  { name: 'Dan Reeder' },
+  { name: 'Trampled by Turtles' },
+  { name: 'Tyler Childers' },
+  { name: 'Sturgill Simpson' },
+  { name: 'Johnny Blue Skies' },
+  // New artists from On Repeat
+  { name: 'Sabrina Carpenter', priorityAlbums: ["Short n' Sweet"] },
+  { name: 'Olivia Rodrigo', priorityAlbums: ['SOUR'] },
+  { name: 'The Highwomen', priorityAlbums: ['The Highwomen'] },
+  { name: 'Rainbow Kitten Surprise', priorityAlbums: ['How to: Friend, Love, Freefall'] },
+  { name: 'Adele', priorityAlbums: ['25'] },
+  { name: 'Randy Travis', priorityAlbums: ['Storms of Life'] },
+  { name: 'The SteelDrivers', priorityAlbums: ['The SteelDrivers'] },
+  { name: 'Hozier', priorityAlbums: ['Hozier'] },
+  { name: 'Keith Whitley', priorityAlbums: ["Don't Close Your Eyes"] },
+  { name: 'Pure Prairie League', priorityAlbums: ["Bustin' Out"] },
+  // More additions
+  { name: 'Townes Van Zandt', priorityAlbums: ['Live at the Old Quarter, Houston, Texas', 'Our Mother the Mountain'] },
+  { name: 'Bob Dylan', priorityAlbums: ['Highway 61 Revisited', 'Blonde on Blonde', 'Blood on the Tracks'] },
+]
+
+// --- END CONFIG ---
+
+// MusicBrainz requires 1 req/sec — use 1.5s + retry on 503
+async function mbFetch<T>(url: string, retries = 3): Promise<T> {
+  await new Promise(r => setTimeout(r, 1500))
+  const res = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  })
+  if (res.status === 503 && retries > 0) {
+    console.log(`    (rate limited, waiting 3s...)`)
+    await new Promise(r => setTimeout(r, 3000))
+    return mbFetch<T>(url, retries - 1)
+  }
+  if (!res.ok) throw new Error(`MusicBrainz ${res.status}: ${await res.text()}`)
+  return res.json() as Promise<T>
 }
 
-function getExistingSpotifyIds(): Set<string> {
-  const rows = db.prepare('SELECT spotify_id FROM tracks WHERE spotify_id IS NOT NULL').all() as { spotify_id: string }[]
-  return new Set(rows.map(r => r.spotify_id))
+interface MBArtist { id: string; name: string }
+
+interface MBReleaseGroup {
+  id: string
+  title: string
+  'primary-type': string
+  'secondary-types'?: string[]
+  'first-release-date': string
 }
 
-function importTrackBatch(tracks: SpotifyTrack[], existingIds: Set<string>): number {
+interface MBRelease {
+  id: string
+  title: string
+  'artist-credit': { name: string; joinphrase?: string }[]
+  media: {
+    position: number
+    tracks: {
+      position: number
+      title: string
+      length: number | null
+      'artist-credit': { name: string; joinphrase?: string }[]
+    }[]
+  }[]
+}
+
+function formatCredit(credits: { name: string; joinphrase?: string }[]): string {
+  return credits.map(c => c.name + (c.joinphrase || '')).join('')
+}
+
+async function searchArtist(name: string): Promise<MBArtist | null> {
+  const data = await mbFetch<{ artists: MBArtist[] }>(
+    `https://musicbrainz.org/ws/2/artist/?query=artist:${encodeURIComponent(`"${name}"`)}&limit=5&fmt=json`
+  )
+  const match = data.artists?.find(a => a.name.toLowerCase() === name.toLowerCase())
+  return match || data.artists?.[0] || null
+}
+
+async function getAlbums(artistId: string): Promise<MBReleaseGroup[]> {
+  const groups: MBReleaseGroup[] = []
+  let offset = 0
+
+  while (true) {
+    const data = await mbFetch<{ 'release-groups': MBReleaseGroup[]; 'release-group-count': number }>(
+      `https://musicbrainz.org/ws/2/release-group?artist=${artistId}&type=album&limit=100&offset=${offset}&fmt=json`
+    )
+    groups.push(...data['release-groups'])
+    if (groups.length >= data['release-group-count'] || data['release-groups'].length === 0) break
+    offset += 100
+  }
+
+  // Filter: only studio albums (no compilations, live, remix, soundtrack, etc.)
+  return groups.filter(g => {
+    const secondary = g['secondary-types'] || []
+    const skipTypes = ['Compilation', 'Live', 'Remix', 'DJ-mix', 'Soundtrack', 'Demo', 'Interview']
+    return !secondary.some(t => skipTypes.includes(t))
+  })
+}
+
+async function getReleaseTracks(releaseGroupId: string): Promise<MBRelease | null> {
+  const data = await mbFetch<{ releases: { id: string; status: string; country: string }[] }>(
+    `https://musicbrainz.org/ws/2/release?release-group=${releaseGroupId}&limit=10&fmt=json`
+  )
+
+  // Prefer official US/XW releases
+  const sorted = data.releases.sort((a, b) => {
+    const aScore = (a.status === 'Official' ? 2 : 0) + (['US', 'XW'].includes(a.country) ? 1 : 0)
+    const bScore = (b.status === 'Official' ? 2 : 0) + (['US', 'XW'].includes(b.country) ? 1 : 0)
+    return bScore - aScore
+  })
+
+  if (sorted.length === 0) return null
+
+  return mbFetch<MBRelease>(
+    `https://musicbrainz.org/ws/2/release/${sorted[0].id}?inc=recordings+artist-credits&fmt=json`
+  )
+}
+
+async function getCoverArt(releaseGroupId: string): Promise<string> {
+  try {
+    const res = await fetch(`https://coverartarchive.org/release-group/${releaseGroupId}/front`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000),
+    })
+    if (res.status >= 300 && res.status < 400) {
+      return res.headers.get('location') || ''
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+function getExistingTracks(): Set<string> {
+  const rows = db.prepare('SELECT title, artist, album FROM tracks').all() as { title: string; artist: string; album: string }[]
+  return new Set(rows.map(r => `${r.title.toLowerCase()}|${r.artist.toLowerCase()}|${r.album.toLowerCase()}`))
+}
+
+const importBatch = db.transaction((tracks: {
+  title: string; artist: string; album: string; album_artist: string
+  track_number: number; disc_number: number; duration_ms: number; album_art_url: string
+}[], existing: Set<string>): number => {
   let count = 0
   for (const t of tracks) {
-    if (existingIds.has(t.spotifyId)) continue
-    if (totalImported >= MAX_NEW_TRACKS) break
-    insertTrack({
-      title: t.title,
-      artist: t.artist,
-      album: t.album,
-      album_artist: t.albumArtist,
-      track_number: t.trackNumber,
-      disc_number: t.discNumber,
-      duration_ms: t.durationMs,
-      spotify_id: t.spotifyId,
-      album_art_url: t.albumArtUrl,
-    })
-    existingIds.add(t.spotifyId)
-    totalImported++
+    const key = `${t.title.toLowerCase()}|${t.artist.toLowerCase()}|${t.album.toLowerCase()}`
+    if (existing.has(key)) continue
+    insertTrack(t)
+    existing.add(key)
     count++
   }
   return count
-}
+})
 
-async function phase1TopTrackAlbums(existingIds: Set<string>): Promise<{ albums: number; tracks: number }> {
-  const timeRanges: TimeRange[] = ['short_term', 'medium_term', 'long_term']
-  const albumIds = new Map<string, string>() // albumId → first track artist for logging
+async function importAlbum(
+  album: MBReleaseGroup,
+  existing: Set<string>,
+  isPriority: boolean,
+): Promise<number> {
+  console.log(`  ${isPriority ? '* ' : ''}${album.title}${isPriority ? ' [priority]' : ''}`)
 
-  // Collect unique album IDs from top tracks
-  for (const range of timeRanges) {
-    progress('Phase 1', `Fetching top tracks (${range})`)
-    const tracks = await getTopTracks(range, 50)
-    for (const t of tracks) {
-      if (t.albumId && !albumIds.has(t.albumId)) {
-        albumIds.set(t.albumId, `${t.albumArtist} - ${t.album}`)
-      }
+  let release: MBRelease | null
+  try {
+    release = await getReleaseTracks(album.id)
+  } catch (err) {
+    console.log(`    SKIP (${(err as Error).message})`)
+    return 0
+  }
+
+  if (!release || release.media.length === 0) {
+    console.log(`    SKIP (no tracks found)`)
+    return 0
+  }
+
+  const albumArtist = formatCredit(release['artist-credit'])
+  const coverArt = await getCoverArt(album.id)
+
+  const tracks: Parameters<typeof importBatch>[0] = []
+  for (const disc of release.media) {
+    for (const track of disc.tracks) {
+      tracks.push({
+        title: track.title,
+        artist: track['artist-credit'] ? formatCredit(track['artist-credit']) : albumArtist,
+        album: release.title,
+        album_artist: albumArtist,
+        track_number: track.position,
+        disc_number: disc.position,
+        duration_ms: track.length || 0,
+        album_art_url: coverArt,
+      })
     }
   }
 
-  progressLine(`Found ${albumIds.size} unique albums from top tracks`)
-
-  let albumCount = 0
-  let trackCount = 0
-  let i = 0
-
-  for (const [albumId, label] of albumIds) {
-    if (totalImported >= MAX_NEW_TRACKS) break
-    i++
-    progress('Phase 1', `Album ${i}/${albumIds.size}: ${label}`)
-
-    await new Promise(r => setTimeout(r, 300))
-
-    let tracks: SpotifyTrack[]
-    try {
-      tracks = await getAlbumTracks(albumId)
-    } catch (err) {
-      progressLine(`  Skipping "${label}" — ${(err as Error).message}`)
-      continue
-    }
-
-    const imported = importTrackBatch(tracks, existingIds)
-    if (imported > 0) {
-      albumCount++
-      trackCount += imported
-    }
+  const imported = importBatch(tracks, existing)
+  if (imported > 0) {
+    console.log(`    + ${imported} tracks`)
+  } else {
+    console.log(`    already in library`)
   }
-
-  return { albums: albumCount, tracks: trackCount }
-}
-
-async function phase2ArtistDiscographies(existingIds: Set<string>): Promise<{ artists: number; albums: number; tracks: number }> {
-  progress('Phase 2', 'Fetching top artists...')
-  const artists = await getTopArtists('long_term', 50)
-  progressLine(`Found ${artists.length} top artists`)
-
-  let artistCount = 0
-  let albumCount = 0
-  let trackCount = 0
-
-  for (let ai = 0; ai < artists.length; ai++) {
-    const artist = artists[ai]
-    if (totalImported >= MAX_NEW_TRACKS) {
-      progressLine(`Reached track budget (${MAX_NEW_TRACKS}), stopping`)
-      break
-    }
-
-    progress('Phase 2', `Artist ${ai + 1}/${artists.length}: ${artist.name}`)
-
-    let albums
-    try {
-      albums = await getArtistAlbums(artist.id)
-    } catch (err) {
-      progressLine(`  Skipping ${artist.name} — ${(err as Error).message}`)
-      continue
-    }
-
-    let artistTracks = 0
-
-    for (const album of albums) {
-      if (totalImported >= MAX_NEW_TRACKS) break
-
-      await new Promise(r => setTimeout(r, 300))
-
-      let tracks: SpotifyTrack[]
-      try {
-        tracks = await getAlbumTracks(album.id)
-      } catch (err) {
-        continue // silently skip failed albums
-      }
-
-      const imported = importTrackBatch(tracks, existingIds)
-      if (imported > 0) {
-        albumCount++
-        artistTracks += imported
-      }
-    }
-
-    if (artistTracks > 0) {
-      artistCount++
-      progressLine(`  ${artist.name}: ${artistTracks} new tracks`)
-    }
-  }
-
-  return { artists: artistCount, albums: albumCount, tracks: trackCount }
+  return imported
 }
 
 async function main() {
-  if (!isConnected()) {
-    console.error('Not connected to Spotify. Start the app and connect first.')
-    process.exit(1)
+  const stats = getLibraryStats()
+  console.log(`Library: ${stats.downloaded} downloaded, ${stats.pending} pending\n`)
+
+  const existing = getExistingTracks()
+  let totalImported = 0
+
+  // Phase 1: Resolve all artists and fetch album lists
+  const artistAlbums: { entry: ArtistEntry; priority: MBReleaseGroup[]; albums: MBReleaseGroup[] }[] = []
+
+  for (const entry of ARTISTS) {
+    console.log(`Searching: ${entry.name}...`)
+
+    let artist: MBArtist | null
+    try {
+      artist = await searchArtist(entry.name)
+    } catch (err) {
+      console.log(`  ERROR: ${(err as Error).message}`)
+      continue
+    }
+
+    if (!artist) {
+      console.log(`  Not found`)
+      continue
+    }
+
+    console.log(`  Found: ${artist.name}`)
+
+    let albums: MBReleaseGroup[]
+    try {
+      albums = await getAlbums(artist.id)
+    } catch (err) {
+      console.log(`  ERROR: ${(err as Error).message}`)
+      continue
+    }
+
+    albums.sort((a, b) => (a['first-release-date'] || '').localeCompare(b['first-release-date'] || ''))
+
+    const priority: MBReleaseGroup[] = []
+    const rest: MBReleaseGroup[] = []
+    for (const album of albums) {
+      if (entry.priorityAlbums?.some(p => album.title.toLowerCase().includes(p.toLowerCase()))) {
+        priority.push(album)
+      } else {
+        rest.push(album)
+      }
+    }
+
+    console.log(`  ${priority.length + rest.length} studio albums`)
+    artistAlbums.push({ entry, priority, albums: rest })
   }
 
-  const stats = getLibraryStats()
-  console.log(`Current library: ${stats.downloaded} downloaded, ${stats.pending} pending`)
-  console.log(`Target: ~${MAX_SIZE_GB}GB (~${MAX_NEW_TRACKS} tracks at ~${AVG_TRACK_SIZE_MB}MB each)\n`)
+  // Phase 2: Import priority albums first
+  console.log(`\n--- Importing priority albums ---`)
+  for (const { entry, priority } of artistAlbums) {
+    for (const album of priority) {
+      console.log(`\n[${entry.name}]`)
+      totalImported += await importAlbum(album, existing, true)
+    }
+  }
 
-  const existingIds = getExistingSpotifyIds()
+  // Phase 3: Round-robin — one album per artist at a time
+  console.log(`\n--- Importing albums (round-robin) ---`)
+  const cursors = artistAlbums.map(() => 0)
+  let anyLeft = true
 
-  // Phase 1: Top tracks → full albums
-  console.log('=== Phase 1: Top Tracks → Full Albums ===')
-  const p1 = await phase1TopTrackAlbums(existingIds)
-  progressLine(`Phase 1 done: ${p1.tracks} tracks from ${p1.albums} albums\n`)
+  while (anyLeft) {
+    anyLeft = false
+    for (let i = 0; i < artistAlbums.length; i++) {
+      const { entry, albums } = artistAlbums[i]
+      if (cursors[i] >= albums.length) continue
 
-  // Phase 2: Top artists → discographies
-  console.log('=== Phase 2: Top Artists → Discographies ===')
-  const p2 = await phase2ArtistDiscographies(existingIds)
-  progressLine(`Phase 2 done: ${p2.tracks} tracks from ${p2.artists} artists\n`)
+      anyLeft = true
+      const album = albums[cursors[i]]
+      cursors[i]++
 
-  // Summary
-  const estGB = (totalImported * AVG_TRACK_SIZE_MB / 1024).toFixed(1)
+      console.log(`\n[${entry.name}]`)
+      totalImported += await importAlbum(album, existing, false)
+    }
+  }
+
   const pending = (db.prepare("SELECT COUNT(*) as c FROM tracks WHERE download_status = 'pending'").get() as { c: number }).c
+  const estGB = (totalImported * 5 / 1024).toFixed(1)
 
-  console.log('=== Summary ===')
-  console.log(`Total new tracks imported: ${totalImported}`)
-  console.log(`Estimated download size: ~${estGB} GB`)
-  console.log(`Total pending in DB: ${pending}`)
-  console.log('')
-  console.log('Next: start the app and go to the Downloads page to begin downloading.')
+  console.log(`\n=== Done ===`)
+  console.log(`New tracks imported: ${totalImported} (~${estGB}GB)`)
+  console.log(`Total pending downloads: ${pending}`)
+  console.log(`\nStart the app and go to Downloads to begin downloading.`)
 }
 
 main().catch(err => {
-  console.error('\nFatal error:', err)
+  console.error('\nError:', err)
   process.exit(1)
 })
