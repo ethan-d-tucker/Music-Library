@@ -4,6 +4,7 @@ import { LibraryBrowser } from './components/LibraryBrowser.tsx'
 import { ImportPage } from './components/ImportPage.tsx'
 import { SearchPage } from './components/SearchPage.tsx'
 import { PlaylistsPage } from './components/PlaylistsPage.tsx'
+import { DownloadsPage } from './components/DownloadsPage.tsx'
 
 export default function App() {
   const page = useAppStore((s) => s.page)
@@ -13,6 +14,7 @@ export default function App() {
       {page === 'library' && <LibraryBrowser />}
       {page === 'import' && <ImportPage />}
       {page === 'search' && <SearchPage />}
+      {page === 'downloads' && <DownloadsPage />}
       {page === 'playlists' && <PlaylistsPage />}
     </Layout>
   )

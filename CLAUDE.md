@@ -7,7 +7,7 @@ A local music library manager that downloads tracks via yt-dlp and organizes the
 Monorepo with two packages:
 
 - **`server/`** — Express 5 API (TypeScript, tsx watch). SQLite via better-sqlite3. Handles Spotify metadata, yt-dlp downloads, file tagging (node-id3), M3U playlist generation, and library organization.
-- **`client/`** — React 19 SPA (TypeScript, Vite, Tailwind v4). State managed with Zustand. Pages: library browser (artists/albums/songs tabs in sidebar), import, search, playlists.
+- **`client/`** — React 19 SPA (TypeScript, Vite, Tailwind v4). State managed with Zustand. Pages: library browser (artists/albums/songs tabs in sidebar), import, search, downloads, playlists.
 
 ## Commands
 
@@ -31,6 +31,7 @@ cd client && npm run build  # Production build
 - `client/src/components/ImportPage.tsx` — Spotify import with search, auto-download on import, full-page progress view
 - `client/src/components/PlaylistsPage.tsx` — Playlist management and batch downloads
 - `client/src/components/SearchPage.tsx` — YouTube search (videos + playlists) and manual download
+- `client/src/components/DownloadsPage.tsx` — Download queue and progress tracking
 
 ## Environment
 
@@ -38,6 +39,9 @@ cd client && npm run build  # Production build
 - `MUSIC_DIR` defaults to `~/Music/library`
 - Server runs on port 3001 by default
 - External binaries: yt-dlp, ffmpeg, deno (auto-discovered from WinGet paths on Windows)
+- Server serves built client (`client/dist`) as static files, so port 3001 serves both API and SPA
+- Remote access to app at `https://library.localmusicoklahoma.store` via Cloudflare Tunnel
+- After client changes, run `cd client && npm run build` to update the production build served on port 3001
 
 ## Navidrome (Streaming Server)
 

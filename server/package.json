@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "top-music": "tsx scripts/top-music.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.9.1",

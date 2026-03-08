@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { Link2, Check, Loader2, Music, Disc3, Heart, Download, Search, ArrowLeft, ListMusic } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link2, Check, Loader2, Music, Disc3, Heart, Search, ListMusic } from 'lucide-react'
 import { useAppStore } from '../lib/store.ts'
 import {
   getSpotifyStatus,
@@ -40,35 +40,14 @@ export function ImportPage() {
   const [importResult, setImportResult] = useState<ImportResult[] | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [batchJobId, setBatchJobId] = useState<string | null>(null)
-  const [batchProgress, setBatchProgress] = useState<{
-    total: number; completed: number; failed: number; current: string; done: boolean
-  } | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
   const setPage = useAppStore((s) => s.setPage)
+  const setBatchJobId = useAppStore((s) => s.setBatchJobId)
 
   // Spotify search
   const [searchQuery, setSearchQuery] = useState('')
   const debouncedSearch = useDebounce(searchQuery, 400)
   const [searchResults, setSearchResults] = useState<{ albums: SpotifyAlbum[]; playlists: SpotifyPlaylist[] } | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
-
-  // SSE for batch download progress
-  useEffect(() => {
-    if (!batchJobId) return
-    const es = new EventSource(`/api/download/progress/${batchJobId}`)
-    eventSourceRef.current = es
-    es.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      setBatchProgress(data)
-      if (data.done) {
-        es.close()
-        setBatchJobId(null)
-      }
-    }
-    es.onerror = () => es.close()
-    return () => es.close()
-  }, [batchJobId])
 
   // Spotify search effect
   useEffect(() => {
@@ -144,6 +123,7 @@ export function ImportPage() {
     try {
       const { jobId } = await startBatchDownload()
       setBatchJobId(jobId)
+      setPage('downloads')
     } catch (err) {
       console.error('Failed to start downloads:', err)
     }
@@ -154,7 +134,6 @@ export function ImportPage() {
       setImporting(true)
       setImportResult(null)
       setImportError(null)
-      setBatchProgress(null)
       try {
         const result = await importLikedSongs()
         setImportResult(result.results)
@@ -172,7 +151,6 @@ export function ImportPage() {
     setImporting(true)
     setImportResult(null)
     setImportError(null)
-    setBatchProgress(null)
     try {
       const ids = [...selected]
       // Determine if we're importing playlists or albums
@@ -193,8 +171,6 @@ export function ImportPage() {
   function resetImport() {
     setImportResult(null)
     setImportError(null)
-    setBatchProgress(null)
-    setBatchJobId(null)
     setSelected(new Set())
     setSearchQuery('')
     setSearchResults(null)
@@ -222,73 +198,33 @@ export function ImportPage() {
     )
   }
 
-  // === Download Progress View ===
+  // After import, show summary with option to import more
   if (importResult) {
-    const progress = batchProgress
-    const isDownloading = batchJobId || (progress && !progress.done)
-
     return (
       <div>
         <h2 className="text-xl font-bold mb-4">Import from Spotify</h2>
-
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
-          {/* Import summary */}
-          <div className="mb-4">
-            <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
-              {isDownloading ? (
-                <><Download size={20} className="animate-pulse text-[var(--color-accent)]" /> Downloading...</>
-              ) : progress?.done ? (
-                <><Check size={20} className="text-[var(--color-success)]" /> Download Complete</>
-              ) : (
-                <><Check size={20} className="text-[var(--color-success)]" /> Import Complete</>
-              )}
-            </h3>
-            <div className="text-sm text-[var(--color-text-muted)]">
-              {importResult.map((r) => (
-                <p key={r.name}>{r.name}: {r.tracksImported} tracks</p>
-              ))}
-            </div>
+          <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
+            <Check size={20} className="text-[var(--color-success)]" /> Import Complete
+          </h3>
+          <div className="text-sm text-[var(--color-text-muted)] mb-4">
+            {importResult.map((r) => (
+              <p key={r.name}>{r.name}: {r.tracksImported} tracks</p>
+            ))}
           </div>
-
-          {/* Progress bar */}
-          {progress && (
-            <div className="mb-4">
-              <div className="flex items-center justify-between text-sm mb-2">
-                <span>{progress.completed + progress.failed} / {progress.total}</span>
-                <span className="text-[var(--color-text-muted)]">
-                  {Math.round(((progress.completed + progress.failed) / progress.total) * 100)}%
-                </span>
-              </div>
-              <div className="w-full h-2.5 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-300"
-                  style={{ width: `${((progress.completed + progress.failed) / progress.total) * 100}%` }}
-                />
-              </div>
-              {progress.current && !progress.done && (
-                <p className="text-sm text-[var(--color-text-muted)] mt-2 truncate">{progress.current}</p>
-              )}
-              {progress.done && progress.failed > 0 && (
-                <p className="text-sm text-[var(--color-danger)] mt-2">{progress.failed} failed</p>
-              )}
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex gap-3 mt-4">
-            {(!isDownloading) && (
-              <button
-                onClick={() => setPage('library')}
-                className="rounded-lg bg-[var(--color-accent)] px-5 py-2 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors"
-              >
-                View in Library
-              </button>
-            )}
+          <p className="text-sm text-[var(--color-text-muted)] mb-4">Downloads started — check the Downloads page for progress.</p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setPage('downloads')}
+              className="rounded-lg bg-[var(--color-accent)] px-5 py-2 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors"
+            >
+              View Downloads
+            </button>
             <button
               onClick={resetImport}
               className="rounded-lg border border-[var(--color-border)] px-5 py-2 text-sm font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] transition-colors"
             >
-              <span className="flex items-center gap-1"><ArrowLeft size={14} /> Import More</span>
+              Import More
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type Page = 'library' | 'import' | 'search' | 'playlists'
+export type Page = 'library' | 'import' | 'search' | 'playlists' | 'downloads'
 export type LibraryTab = 'artists' | 'albums' | 'songs'
 
 interface AppState {

@@ -26,6 +26,7 @@ export interface SpotifyTrack {
   artist: string
   albumArtist: string
   album: string
+  albumId?: string
   trackNumber: number
   discNumber: number
   durationMs: number
@@ -36,7 +37,7 @@ export function getAuthUrl(redirectUri: string, state?: string): string {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: SPOTIFY_CLIENT_ID,
-    scope: 'playlist-read-private playlist-read-collaborative user-library-read',
+    scope: 'playlist-read-private playlist-read-collaborative user-library-read user-top-read',
     redirect_uri: redirectUri,
   })
   if (state) params.set('state', state)
@@ -95,11 +96,16 @@ async function getAccessToken(): Promise<string> {
   return refreshToken()
 }
 
-async function spotifyGet<T>(endpoint: string): Promise<T> {
+async function spotifyGet<T>(endpoint: string, retries = 3): Promise<T> {
   const token = await getAccessToken()
   const res = await fetch(`${SPOTIFY_API}${endpoint}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
+  if (res.status === 429 && retries > 0) {
+    const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10)
+    await new Promise(r => setTimeout(r, retryAfter * 1000))
+    return spotifyGet<T>(endpoint, retries - 1)
+  }
   if (!res.ok) throw new Error(`Spotify API error: ${res.status} ${await res.text()}`)
   return res.json() as Promise<T>
 }
@@ -343,4 +349,92 @@ export async function searchSpotify(query: string): Promise<{ albums: SpotifyAlb
 
 export function isConnected(): boolean {
   return !!getConfig('spotify_refresh_token')
+}
+
+export type TimeRange = 'short_term' | 'medium_term' | 'long_term'
+
+export async function getTopTracks(timeRange: TimeRange, limit = 50): Promise<SpotifyTrack[]> {
+  const data = await spotifyGet<{
+    items: {
+      id: string
+      name: string
+      artists: { name: string }[]
+      album: { id: string; name: string; artists: { name: string }[]; images: { url: string }[] }
+      track_number: number
+      disc_number: number
+      duration_ms: number
+    }[]
+  }>(`/me/top/tracks?time_range=${timeRange}&limit=${limit}`)
+
+  return data.items.map(t => ({
+    spotifyId: t.id,
+    title: t.name,
+    artist: t.artists.map(a => a.name).join(', '),
+    albumArtist: t.album.artists.map(a => a.name).join(', '),
+    album: t.album.name,
+    albumId: t.album.id,
+    trackNumber: t.track_number,
+    discNumber: t.disc_number,
+    durationMs: t.duration_ms,
+    albumArtUrl: t.album.images?.[0]?.url || '',
+  }))
+}
+
+export interface SpotifyArtist {
+  id: string
+  name: string
+  imageUrl: string
+  popularity: number
+}
+
+export async function getTopArtists(timeRange: TimeRange, limit = 50): Promise<SpotifyArtist[]> {
+  const data = await spotifyGet<{
+    items: {
+      id: string
+      name: string
+      images: { url: string }[]
+      popularity: number
+    }[]
+  }>(`/me/top/artists?time_range=${timeRange}&limit=${limit}`)
+
+  return data.items.map(a => ({
+    id: a.id,
+    name: a.name,
+    imageUrl: a.images?.[0]?.url || '',
+    popularity: a.popularity,
+  }))
+}
+
+export async function getArtistAlbums(artistId: string): Promise<SpotifyAlbum[]> {
+  const albums: SpotifyAlbum[] = []
+  let offset = 0
+  const limit = 10
+
+  while (true) {
+    const data = await spotifyGet<SpotifyPaginatedResponse<{
+      id: string
+      name: string
+      artists: { name: string }[]
+      total_tracks: number
+      images: { url: string }[]
+      album_group: string
+      album_type: string
+    }>>(`/artists/${artistId}/albums?include_groups=album,single&limit=${limit}&offset=${offset}`)
+
+    for (const a of data.items) {
+      if (!a?.id) continue
+      albums.push({
+        id: a.id,
+        name: a.name,
+        artist: a.artists.map(x => x.name).join(', '),
+        trackCount: a.total_tracks,
+        imageUrl: a.images?.[0]?.url || '',
+      })
+    }
+
+    if (!data.next) break
+    offset += limit
+  }
+
+  return albums
 }

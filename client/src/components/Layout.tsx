@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
-import { Library, Download, Search, ListMusic, User, Disc3, Music } from 'lucide-react'
+import { Library, Download, Search, ListMusic, User, Disc3, Music, ArrowDownToLine } from 'lucide-react'
 import { useAppStore, type Page, type LibraryTab } from '../lib/store.ts'
 
 const navItems: { page: Page; label: string; icon: typeof Library }[] = [
   { page: 'library', label: 'Library', icon: Library },
   { page: 'import', label: 'Import', icon: Download },
   { page: 'search', label: 'Search', icon: Search },
+  { page: 'downloads', label: 'Downloads', icon: ArrowDownToLine },
   { page: 'playlists', label: 'Playlists', icon: ListMusic },
 ]
 
@@ -25,7 +26,10 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen flex-col md:flex-row">
       {/* Desktop sidebar */}
       <nav className="hidden md:block w-56 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-        <h1 className="mb-6 text-lg font-bold text-[var(--color-text)]">Music Library</h1>
+        <div className="mb-6 flex items-center gap-2">
+          <img src="/grumpy-cat.svg" alt="Grumpy Cat" className="w-8 h-8" />
+          <h1 className="text-lg font-bold text-[var(--color-text)]">Music Library</h1>
+        </div>
         <ul className="space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Face -->
+  <ellipse cx="32" cy="36" rx="22" ry="20" fill="#8B7355"/>
+  <!-- Inner face -->
+  <ellipse cx="32" cy="38" rx="16" ry="14" fill="#C4A882"/>
+  <!-- Left ear -->
+  <path d="M12 22L8 4L24 18Z" fill="#8B7355"/>
+  <path d="M14 20L11 8L22 18Z" fill="#DEB8A0"/>
+  <!-- Right ear -->
+  <path d="M52 22L56 4L40 18Z" fill="#8B7355"/>
+  <path d="M50 20L53 8L42 18Z" fill="#DEB8A0"/>
+  <!-- Eyes - grumpy half-closed -->
+  <ellipse cx="24" cy="32" rx="5" ry="3.5" fill="white"/>
+  <ellipse cx="40" cy="32" rx="5" ry="3.5" fill="white"/>
+  <circle cx="24" cy="32.5" r="2.5" fill="#2D5016"/>
+  <circle cx="40" cy="32.5" r="2.5" fill="#2D5016"/>
+  <circle cx="24" cy="32" r="1" fill="black"/>
+  <circle cx="40" cy="32" r="1" fill="black"/>
+  <!-- Grumpy eyebrows - angled down toward center -->
+  <path d="M18 27L30 29" stroke="#5C4A32" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M46 27L34 29" stroke="#5C4A32" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Heavy eyelids -->
+  <path d="M19 30.5Q24 28 29 30.5" stroke="#8B7355" stroke-width="2" fill="#8B7355"/>
+  <path d="M35 30.5Q40 28 45 30.5" stroke="#8B7355" stroke-width="2" fill="#8B7355"/>
+  <!-- Nose -->
+  <ellipse cx="32" cy="39" rx="3" ry="2" fill="#D4837A"/>
+  <!-- Mouth - frowning -->
+  <path d="M24 44Q28 41 32 44Q36 41 40 44" stroke="#5C4A32" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <!-- Headphones -->
+  <path d="M10 30Q10 12 32 12Q54 12 54 30" stroke="#6366f1" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <rect x="6" y="28" width="8" height="12" rx="3" fill="#6366f1"/>
+  <rect x="50" y="28" width="8" height="12" rx="3" fill="#6366f1"/>
+  <!-- Musical note near ear -->
+  <text x="56" y="22" font-size="10" fill="#6366f1">&#9835;</text>
+</svg>

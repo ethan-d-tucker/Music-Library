@@ -15,6 +15,8 @@ const ARTIST_ALIASES: Record<string, string> = {
   'jason isbell and the 400 unit': 'Jason Isbell and the 400 Unit',
   'jason isbell & the 400 unit': 'Jason Isbell and the 400 Unit',
   'justin towes earle': 'Justin Townes Earle',
+  'tyler the creator': 'Tyler, The Creator',
+  'the creator, tyler': 'Tyler, The Creator',
 }
 
 // Multi-artist normalization: sort collaborator names so "A, B, C" and "B, A, C" become the same
