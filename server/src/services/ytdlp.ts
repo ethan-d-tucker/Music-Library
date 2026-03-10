@@ -204,10 +204,10 @@ export async function searchYouTubePlaylists(query: string, limit = 10): Promise
   })
 }
 
-export async function downloadAudio(url: string, outputPath: string): Promise<void> {
+export async function downloadAudio(url: string, outputPath: string, format: 'mp3' | 'flac' = 'mp3'): Promise<void> {
   const args = [
     '-x',
-    '--audio-format', 'mp3',
+    '--audio-format', format,
     '--audio-quality', '0',
     '--no-playlist',
     '--restrict-filenames',

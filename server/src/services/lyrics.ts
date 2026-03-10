@@ -80,7 +80,7 @@ export async function fetchLyrics(params: {
   }
 }
 
-export function writeLrcFile(mp3Path: string, syncedLyrics: string): void {
-  const lrcPath = mp3Path.replace(/\.mp3$/i, '.lrc')
+export function writeLrcFile(audioPath: string, syncedLyrics: string): void {
+  const lrcPath = audioPath.replace(/\.(mp3|flac)$/i, '.lrc')
   writeFileSync(lrcPath, syncedLyrics, 'utf-8')
 }

@@ -17,23 +17,53 @@ const ARTIST_ALIASES: Record<string, string> = {
   'justin towes earle': 'Justin Townes Earle',
   'tyler the creator': 'Tyler, The Creator',
   'the creator, tyler': 'Tyler, The Creator',
+  // Merle Haggard variants (artist + band = single entity)
+  'merle haggard & the strangers': 'Merle Haggard and The Strangers',
+  'merle haggard and the strangers': 'Merle Haggard and The Strangers',
+  'merlehaggardthe strangers': 'Merle Haggard and The Strangers',
+  'merle haggardthe strangers': 'Merle Haggard and The Strangers',
+  'merle haggardmerle haggardthe strangers': 'Merle Haggard and The Strangers',
+  // Neil Young + band = single entity
+  'neil young & crazy horse': 'Neil Young & Crazy Horse',
+  // Other known corrections
+  'jason isbell and friends': 'Jason Isbell',
+  'jason isbell and amanda shires': 'Jason Isbell, Amanda Shires',
+  'bonnie owens and merle haggard with the strangers': 'Bonnie Owens, Merle Haggard',
 }
 
-// Multi-artist normalization: sort collaborator names so "A, B, C" and "B, A, C" become the same
-function normalizeArtist(artist: string): string {
-  // Check alias map first
-  const alias = ARTIST_ALIASES[artist.toLowerCase()]
+// Convert semicolons to " / " (Navidrome's preferred multi-artist separator for auto-splitting)
+export function normalizeArtistSeparators(artist: string): string {
+  if (!artist.includes(';')) return artist
+  return artist.split(';').map(s => s.trim()).filter(Boolean).join(' / ')
+}
+
+// Extract primary artist name for API searches (Deezer, MusicBrainz, etc.)
+export function normalizeForSearch(artist: string): string {
+  return artist
+    .split(';')[0]
+    .split(' / ')[0]
+    .split(',')[0]
+    .replace(/\s*\(feat\..*?\)/gi, '')
+    .trim()
+}
+
+// Multi-artist normalization: fix aliases and sort collaborator names
+export function normalizeArtist(artist: string): string {
+  // Normalize semicolons first
+  const cleaned = normalizeArtistSeparators(artist)
+
+  // Check alias map
+  const alias = ARTIST_ALIASES[cleaned.toLowerCase()]
   if (alias) return alias
 
   // For multi-artist comma-separated names, sort them consistently
-  if (artist.includes(',') && !artist.includes(' and ') && !artist.includes(' & ')) {
-    const parts = artist.split(',').map(s => s.trim()).sort()
+  if (cleaned.includes(',') && !cleaned.includes(' and ') && !cleaned.includes(' & ')) {
+    const parts = cleaned.split(',').map(s => s.trim()).sort()
     const normalized = parts.join(', ')
-    // Check alias for the normalized form too
     return ARTIST_ALIASES[normalized.toLowerCase()] || normalized
   }
 
-  return artist
+  return cleaned
 }
 
 // Parse metadata from folder/file path when tags are missing

@@ -81,5 +81,8 @@ export const NAVIDROME_URL = process.env.NAVIDROME_URL || 'http://localhost:4533
 export const NAVIDROME_USER = process.env.NAVIDROME_USER || ''
 export const NAVIDROME_PASS = process.env.NAVIDROME_PASS || ''
 
+export const DEEZER_ARL = process.env.DEEZER_ARL || ''
+export const AUDIO_FORMAT = (process.env.AUDIO_FORMAT || 'flac') as 'flac' | 'mp3'
+
 // Ensure music directory exists
 mkdirSync(MUSIC_DIR, { recursive: true })

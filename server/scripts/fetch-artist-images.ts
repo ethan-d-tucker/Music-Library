@@ -150,6 +150,113 @@ async function main() {
   }
 
   console.log(`\nArtist images: ${fetched} downloaded, ${noImage} unavailable`)
+
+  // 4. Google Images fallback for anything still missing
+  const stillMissing: { artist: string; album: string; dir: string }[] = []
+  for (const { artist, album, dir } of missing) {
+    const files = fs.readdirSync(dir)
+    const hasArt = files.some(f => /^(cover|folder|album|front|artwork)\.(jpg|jpeg|png|webp)$/i.test(f))
+    if (!hasArt) stillMissing.push({ artist, album, dir })
+  }
+
+  if (stillMissing.length > 0) {
+    console.log(`\nGoogle Images fallback for ${stillMissing.length} remaining albums...\n`)
+    let googleFetched = 0
+
+    for (const { artist, album, dir } of stillMissing) {
+      const cleanArtist = artist.split(';')[0].trim()
+      const query = `${cleanArtist} ${album} album cover`
+      process.stdout.write(`  ${artist} / ${album}... `)
+
+      try {
+        // Use Google's image search and parse image URLs from the HTML
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&tbm=isch`
+        const searchRes = await fetch(searchUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+          signal: AbortSignal.timeout(10000),
+        })
+
+        if (!searchRes.ok) {
+          console.log(`search failed (${searchRes.status})`)
+          continue
+        }
+
+        const html = await searchRes.text()
+
+        // Extract image URLs from Google's response
+        // Google embeds base64 thumbnails and links to full images
+        const imgUrls: string[] = []
+
+        // Pattern 1: data-src or src with https image URLs
+        const urlMatches = html.matchAll(/\["(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)",\d+,\d+\]/gi)
+        for (const m of urlMatches) {
+          const url = m[1]
+          // Skip Google's own assets and tiny thumbnails
+          if (!url.includes('gstatic.com') && !url.includes('google.com')) {
+            imgUrls.push(url)
+          }
+        }
+
+        // Pattern 2: Look for image URLs in JSON-like structures
+        if (imgUrls.length === 0) {
+          const jsonMatches = html.matchAll(/"(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/gi)
+          for (const m of jsonMatches) {
+            const url = m[1]
+            if (!url.includes('gstatic.com') && !url.includes('google.com') && !url.includes('googleapis.com') && url.length < 500) {
+              imgUrls.push(url)
+            }
+          }
+        }
+
+        if (imgUrls.length === 0) {
+          console.log('no images found')
+          continue
+        }
+
+        // Try downloading the first few image URLs until one works
+        let downloaded = false
+        for (const imgUrl of imgUrls.slice(0, 5)) {
+          try {
+            const imgRes = await fetch(imgUrl, {
+              signal: AbortSignal.timeout(10000),
+              redirect: 'follow',
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+            })
+            if (!imgRes.ok) continue
+
+            const buffer = Buffer.from(await imgRes.arrayBuffer())
+            if (buffer.length < 5000) continue // Skip tiny images
+
+            const contentType = imgRes.headers.get('content-type') || ''
+            // Verify it's actually an image
+            if (!contentType.includes('image') && !contentType.includes('octet-stream')) continue
+
+            const ext = contentType.includes('png') ? 'png' : 'jpg'
+            fs.writeFileSync(path.join(dir, `cover.${ext}`), buffer)
+            console.log(`google image (${(buffer.length / 1024).toFixed(0)}KB)`)
+            googleFetched++
+            downloaded = true
+            break
+          } catch {
+            continue
+          }
+        }
+
+        if (!downloaded) {
+          console.log('all image downloads failed')
+        }
+
+        // Small delay to be polite to Google
+        await new Promise(r => setTimeout(r, 2000))
+      } catch (err) {
+        console.log(`error: ${(err as Error).message}`)
+      }
+    }
+
+    console.log(`\nGoogle fallback: ${googleFetched} downloaded, ${stillMissing.length - googleFetched} remaining`)
+  }
 }
 
 main().catch(err => { console.error(err); process.exit(1) })

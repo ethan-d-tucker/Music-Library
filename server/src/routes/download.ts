@@ -1,13 +1,16 @@
 import { Router } from 'express'
+import { existsSync, mkdirSync, renameSync, rmSync } from 'fs'
+import path from 'path'
 import { searchYouTube, searchYouTubePlaylists, downloadAudio, expandPlaylist } from '../services/ytdlp.js'
 import { findBestMatch } from '../services/matcher.js'
 import { tagFile } from '../services/tagger.js'
 import { getTrackPath, getAbsolutePath, ensureDirectories } from '../services/organizer.js'
-import { getTrackById, getPendingTracks, updateTrackStatus, updateTrackLyrics, insertTrack, type TrackRow } from '../db/index.js'
+import { getTrackById, getPendingTracks, getTracksByStatus, updateTrackStatus, updateTrackLyrics, insertTrack, cancelPendingTrack, cancelAllPendingTracks, retryFailedTracks, type TrackRow } from '../db/index.js'
 import { triggerNavidromeScan } from '../services/navidrome.js'
-import { normalizeFile } from '../services/normalizer.js'
+import { normalizeFile, normalizeArtist, normalizeArtistSeparators } from '../services/normalizer.js'
 import { fetchLyrics, writeLrcFile } from '../services/lyrics.js'
-import { MUSIC_DIR } from '../config.js'
+import { MUSIC_DIR, AUDIO_FORMAT } from '../config.js'
+import { searchDeezer, searchDeezerGeneral, downloadDeezerTrack, isDeezerConfigured } from '../services/deezer.js'
 
 const router = Router()
 
@@ -23,6 +26,55 @@ interface BatchJob {
 }
 
 const activeJobs = new Map<string, BatchJob>()
+
+// Deezer search (general text query for UI)
+router.post('/search-deezer', async (req, res) => {
+  const { query } = req.body as { query: string }
+  if (!query) {
+    res.status(400).json({ error: 'query required' })
+    return
+  }
+  try {
+    const results = await searchDeezerGeneral(query)
+    res.json({ results })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// Download a Deezer track directly (from search results)
+router.post('/deezer', async (req, res) => {
+  const { id, title, artist, album, duration, albumCoverUrl } = req.body as {
+    id: number; title: string; artist: string; album: string; duration: number; albumCoverUrl: string
+  }
+  if (!id || !title || !artist) {
+    res.status(400).json({ error: 'id, title, and artist required' })
+    return
+  }
+
+  try {
+    // Insert track into DB
+    const trackId = insertTrack({
+      title, artist, album: album || '',
+      duration_ms: (duration || 0) * 1000,
+      album_art_url: albumCoverUrl || '',
+    })
+    const track = getTrackById(trackId)!
+
+    // If already downloaded, skip
+    if (track.download_status === 'complete' && track.file_path) {
+      res.json({ success: true, track, skipped: true })
+      return
+    }
+
+    // Download via Deezer
+    await downloadAndTagTrack(track)
+    await triggerNavidromeScan()
+    res.json({ success: true, track: getTrackById(trackId) })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
 
 router.post('/search', async (req, res) => {
   const { query } = req.body as { query: string }
@@ -55,22 +107,106 @@ router.post('/search-playlists', async (req, res) => {
 async function downloadAndTagTrack(track: TrackRow): Promise<void> {
   updateTrackStatus(track.id, 'downloading')
 
-  // Find best YouTube match
-  const match = await findBestMatch(track.artist, track.title, track.duration_ms)
-  if (!match) {
-    updateTrackStatus(track.id, 'failed', { error_message: 'No good YouTube match found' })
-    throw new Error(`No match for "${track.artist} - ${track.title}"`)
+  let downloadedFormat: 'flac' | 'mp3' = 'mp3'
+  let deezerId = ''
+  let youtubeId = ''
+
+  // Try Deezer first (if configured)
+  let deezerSuccess = false
+  if (isDeezerConfigured()) {
+    try {
+      const match = await searchDeezer(track.artist, track.title, track.duration_ms)
+      if (match) {
+        // Download to a temp staging directory, then move to final location
+        const stagingDir = path.join(MUSIC_DIR, '_staging', String(track.id))
+        mkdirSync(stagingDir, { recursive: true })
+
+        try {
+          const downloadedPath = await downloadDeezerTrack(match.id, stagingDir, AUDIO_FORMAT)
+          const actualExt = path.extname(downloadedPath).slice(1) as 'flac' | 'mp3'
+          downloadedFormat = actualExt
+
+          // Move to final library location
+          const relativePath = getTrackPath(track.artist, track.album, track.track_number, track.title, track.album_artist, downloadedFormat)
+          const absolutePath = getAbsolutePath(relativePath)
+          ensureDirectories(relativePath)
+          renameSync(downloadedPath, absolutePath)
+
+          deezerId = String(match.id)
+          deezerSuccess = true
+
+          // Fetch lyrics (deemix may have embedded them, but also get LRC sidecar)
+          await handleLyrics(track, absolutePath)
+
+          // Our own tags on top (to match our conventions)
+          const artUrl = track.album_art_url || match.albumCoverUrl || undefined
+          await tagFile(absolutePath, {
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            trackNumber: String(track.track_number),
+            partOfSet: String(track.disc_number),
+            albumArtUrl: artUrl,
+            albumArtist: track.album_artist || undefined,
+          })
+
+          await normalizeFile(absolutePath)
+
+          updateTrackStatus(track.id, 'complete', {
+            file_path: relativePath,
+            deezer_id: deezerId,
+            format: downloadedFormat,
+            album_art_url: artUrl,
+          })
+        } finally {
+          // Clean up staging dir
+          try { rmSync(stagingDir, { recursive: true, force: true }) } catch {}
+        }
+      }
+    } catch (err) {
+      console.log(`  Deezer failed for "${track.artist} - ${track.title}": ${(err as Error).message}, falling back to YouTube`)
+    }
   }
 
-  // Compute file path
-  const relativePath = getTrackPath(track.artist, track.album, track.track_number, track.title, track.album_artist)
-  const absolutePath = getAbsolutePath(relativePath)
-  ensureDirectories(relativePath)
+  // Fall back to YouTube if Deezer didn't work
+  if (!deezerSuccess) {
+    const match = await findBestMatch(track.artist, track.title, track.duration_ms)
+    if (!match) {
+      updateTrackStatus(track.id, 'failed', { error_message: 'No match found on Deezer or YouTube' })
+      throw new Error(`No match for "${track.artist} - ${track.title}"`)
+    }
 
-  // Download
-  await downloadAudio(match.result.url, absolutePath)
+    downloadedFormat = 'mp3'
+    const relativePath = getTrackPath(track.artist, track.album, track.track_number, track.title, track.album_artist, 'mp3')
+    const absolutePath = getAbsolutePath(relativePath)
+    ensureDirectories(relativePath)
 
-  // Fetch lyrics
+    await downloadAudio(match.result.url, absolutePath, 'mp3')
+
+    await handleLyrics(track, absolutePath)
+
+    await tagFile(absolutePath, {
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      trackNumber: String(track.track_number),
+      partOfSet: String(track.disc_number),
+      albumArtUrl: track.album_art_url,
+      albumArtist: track.album_artist || undefined,
+    })
+
+    await normalizeFile(absolutePath)
+
+    youtubeId = match.result.id
+    updateTrackStatus(track.id, 'complete', {
+      file_path: relativePath,
+      youtube_id: youtubeId,
+      format: 'mp3',
+    })
+  }
+}
+
+async function handleLyrics(track: TrackRow, absolutePath: string): Promise<void> {
   let lyricsPlain = ''
   let lyricsSynced = ''
   let lyricsStatus = 'not_found'
@@ -92,27 +228,6 @@ async function downloadAndTagTrack(track: TrackRow): Promise<void> {
   } catch {
     lyricsStatus = 'error'
   }
-
-  // Tag
-  await tagFile(absolutePath, {
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    trackNumber: String(track.track_number),
-    partOfSet: String(track.disc_number),
-    albumArtUrl: track.album_art_url,
-    albumArtist: track.album_artist || undefined,
-    lyrics: lyricsPlain || undefined,
-  })
-
-  // Normalize artist name if needed
-  await normalizeFile(absolutePath)
-
-  // Update DB
-  updateTrackStatus(track.id, 'complete', {
-    file_path: relativePath,
-    youtube_id: match.result.id,
-  })
   updateTrackLyrics(track.id, lyricsPlain, lyricsSynced, lyricsStatus)
 }
 
@@ -182,6 +297,37 @@ router.post('/url', async (req, res) => {
   }
 })
 
+// --- Pending track management ---
+
+// List pending tracks
+router.get('/pending', (_req, res) => {
+  res.json({ tracks: getPendingTracks() })
+})
+
+// List failed tracks
+router.get('/failed', (_req, res) => {
+  res.json({ tracks: getTracksByStatus('failed') })
+})
+
+// Cancel a single pending track
+router.delete('/pending/:id', (req, res) => {
+  const id = parseInt(req.params.id)
+  const removed = cancelPendingTrack(id)
+  res.json({ success: removed })
+})
+
+// Cancel all pending tracks
+router.delete('/pending', (_req, res) => {
+  const count = cancelAllPendingTracks()
+  res.json({ success: true, cancelled: count })
+})
+
+// Retry all failed tracks
+router.post('/retry-failed', (_req, res) => {
+  const count = retryFailedTracks()
+  res.json({ success: true, retried: count })
+})
+
 // Start batch download — optionally provide trackIds to download specific tracks
 router.post('/batch', (req, res) => {
   const { trackIds } = req.body as { trackIds?: number[] }
@@ -212,6 +358,12 @@ router.post('/batch', (req, res) => {
   // Process in background
   ;(async () => {
     for (const track of pending) {
+      // Skip if cancelled mid-batch
+      const freshTrack = getTrackById(track.id)
+      if (!freshTrack || freshTrack.download_status !== 'pending') {
+        job.total--
+        continue
+      }
       job.current = `${track.artist} - ${track.title}`
       try {
         await downloadAndTagTrack(track)
@@ -220,7 +372,7 @@ router.post('/batch', (req, res) => {
         job.failed++
         job.errors.push({ trackId: track.id, title: `${track.artist} - ${track.title}`, error: (err as Error).message })
       }
-      // Small delay to avoid YouTube throttling
+      // Small delay between downloads
       await new Promise(r => setTimeout(r, 1500))
     }
     job.done = true

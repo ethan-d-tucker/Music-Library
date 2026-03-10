@@ -915,10 +915,18 @@ async function fetchMissingArt(): Promise<void> {
 
   for (const { artistFolder, albumFolder, albumDir } of missing) {
     const albumName = albumFolder
+      .replace(/\s*\(Deluxe.*?\)/i, '')
+      .replace(/\s*\(Super Deluxe.*?\)/i, '')
+      .replace(/\s*\(\d+th Anniversary.*?\)/i, '')
+      .replace(/\s*\(\d{4}\s*Remaster.*?\)/i, '')
+      .replace(/\s*\(Remaster.*?\)/i, '')
+      .replace(/\s*\(Special.*?\)/i, '')
+      .replace(/\s*\(Original Motion Picture.*?\)/i, '')
       .replace(/\s*\(\d{4}\).*$/, '')
-      .replace(/\s*\[.*$/, '')
+      .replace(/\s*\[.*?\]/g, '')
       .trim()
     const artistName = artistFolder
+      .split(';')[0] // handle semicolon-separated artists
       .replace(/\s*(&|and|with)\s+.+$/i, '')
       .trim()
 
@@ -936,6 +944,20 @@ async function fetchMissingArt(): Promise<void> {
       }>(
         `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(query)}&limit=5&fmt=json`
       )
+
+      if (!data.releases?.length) {
+        // Retry with base album name only (strip everything after first dash/colon)
+        const baseAlbum = albumName.replace(/\s*[-:–].*$/, '').trim()
+        if (baseAlbum !== albumName && baseAlbum.length > 2) {
+          const retryQuery = `release:"${baseAlbum}" AND artist:"${artistName}"`
+          const retryData = await mbFetch<typeof data>(
+            `https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(retryQuery)}&limit=5&fmt=json`
+          )
+          if (retryData.releases?.length) {
+            data.releases = retryData.releases
+          }
+        }
+      }
 
       if (!data.releases?.length) {
         console.log('not found on MusicBrainz')

@@ -1,23 +1,28 @@
 import path from 'path'
 import { mkdirSync } from 'fs'
 import { MUSIC_DIR } from '../config.js'
+import { normalizeArtist, normalizeArtistSeparators } from './normalizer.js'
 
 function sanitize(name: string): string {
   return name
     .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s{2,}/g, ' ')
     .replace(/\.\.\./g, '\u2026')
     .replace(/\.+$/, '')
     .trim()
     || 'Unknown'
 }
 
-export function getTrackPath(artist: string, album: string, trackNumber: number, title: string, albumArtist?: string): string {
-  const folderArtist = albumArtist || artist.split(',')[0].trim()
+export function getTrackPath(artist: string, album: string, trackNumber: number, title: string, albumArtist?: string, format: 'flac' | 'mp3' = 'mp3'): string {
+  // Normalize artist separators (semicolons → " / ") and apply alias fixes before splitting
+  const rawArtist = normalizeArtist(normalizeArtistSeparators(albumArtist || artist))
+  // Use first artist only for folder name — split on " / " and commas (but not "and"/"&" bands)
+  const folderArtist = rawArtist.split(' / ')[0].split(',')[0].trim()
   const safeArtist = sanitize(folderArtist)
   const safeAlbum = sanitize(album || 'Singles')
   const safeTitle = sanitize(title)
   const num = trackNumber > 0 ? `${String(trackNumber).padStart(2, '0')} ` : ''
-  return path.join(safeArtist, safeAlbum, `${num}${safeTitle}.mp3`).replace(/\\/g, '/')
+  return path.join(safeArtist, safeAlbum, `${num}${safeTitle}.${format}`).replace(/\\/g, '/')
 }
 
 export function getAbsolutePath(relativePath: string): string {

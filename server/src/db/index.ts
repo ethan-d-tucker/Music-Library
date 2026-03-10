@@ -81,21 +81,46 @@ export function insertTrack(track: {
     spotify_id: track.spotify_id || null,
     album_art_url: track.album_art_url || '',
   })
-  // If upsert matched existing row, return that row's id
-  if (result.changes === 0) {
-    const row = db.prepare('SELECT id FROM tracks WHERE spotify_id = ?').get(track.spotify_id) as { id: number }
-    return row.id
+  // If upsert matched existing row via spotify_id, lastInsertRowid is unreliable — look up the actual ID
+  if (track.spotify_id) {
+    const row = db.prepare('SELECT id FROM tracks WHERE spotify_id = ?').get(track.spotify_id) as { id: number } | undefined
+    if (row) return row.id
   }
   return Number(result.lastInsertRowid)
 }
 
-export function updateTrackStatus(id: number, status: string, extra?: { file_path?: string; youtube_id?: string; error_message?: string }): void {
+export function updateTrackStatus(id: number, status: string, extra?: { file_path?: string; youtube_id?: string; error_message?: string; deezer_id?: string; format?: string; album_art_url?: string }): void {
   const sets = ['download_status = ?', "updated_at = datetime('now')"]
   const params: (string | number)[] = [status]
 
   if (extra?.file_path !== undefined) { sets.push('file_path = ?'); params.push(extra.file_path) }
   if (extra?.youtube_id !== undefined) { sets.push('youtube_id = ?'); params.push(extra.youtube_id) }
   if (extra?.error_message !== undefined) { sets.push('error_message = ?'); params.push(extra.error_message) }
+  if (extra?.deezer_id !== undefined) { sets.push('deezer_id = ?'); params.push(extra.deezer_id) }
+  if (extra?.format !== undefined) { sets.push('format = ?'); params.push(extra.format) }
+  if (extra?.album_art_url !== undefined) { sets.push('album_art_url = ?'); params.push(extra.album_art_url) }
+
+  params.push(id)
+  db.prepare(`UPDATE tracks SET ${sets.join(', ')} WHERE id = ?`).run(...params)
+}
+
+export function updateTrackMetadata(id: number, fields: {
+  title?: string; artist?: string; album?: string; album_artist?: string;
+  track_number?: number; year?: number; album_art_url?: string; file_path?: string
+}): void {
+  const sets: string[] = ["updated_at = datetime('now')"]
+  const params: (string | number)[] = []
+
+  if (fields.title !== undefined) { sets.push('title = ?'); params.push(fields.title) }
+  if (fields.artist !== undefined) { sets.push('artist = ?'); params.push(fields.artist) }
+  if (fields.album !== undefined) { sets.push('album = ?'); params.push(fields.album) }
+  if (fields.album_artist !== undefined) { sets.push('album_artist = ?'); params.push(fields.album_artist) }
+  if (fields.track_number !== undefined) { sets.push('track_number = ?'); params.push(fields.track_number) }
+  if (fields.year !== undefined) { sets.push('year = ?'); params.push(fields.year) }
+  if (fields.album_art_url !== undefined) { sets.push('album_art_url = ?'); params.push(fields.album_art_url) }
+  if (fields.file_path !== undefined) { sets.push('file_path = ?'); params.push(fields.file_path) }
+
+  if (sets.length === 1) return // Only the updated_at, nothing to update
 
   params.push(id)
   db.prepare(`UPDATE tracks SET ${sets.join(', ')} WHERE id = ?`).run(...params)
@@ -111,6 +136,21 @@ export function getTrackBySpotifyId(spotifyId: string): TrackRow | undefined {
 
 export function getPendingTracks(): TrackRow[] {
   return db.prepare("SELECT * FROM tracks WHERE download_status = 'pending' ORDER BY id").all() as TrackRow[]
+}
+
+export function cancelPendingTrack(id: number): boolean {
+  const result = db.prepare("DELETE FROM tracks WHERE id = ? AND download_status = 'pending'").run(id)
+  return result.changes > 0
+}
+
+export function cancelAllPendingTracks(): number {
+  const result = db.prepare("DELETE FROM tracks WHERE download_status = 'pending'").run()
+  return result.changes
+}
+
+export function retryFailedTracks(): number {
+  const result = db.prepare("UPDATE tracks SET download_status = 'pending', error_message = '' WHERE download_status = 'failed'").run()
+  return result.changes
 }
 
 export function getTracksByStatus(status: string): TrackRow[] {
@@ -170,10 +210,10 @@ export interface PlaylistRow {
   updated_at: string
 }
 
-export function insertPlaylist(playlist: { name: string; description?: string; spotify_id?: string }): number {
+export function insertPlaylist(playlist: { name: string; description?: string; spotify_id?: string; user_id?: number }): number {
   const result = db.prepare(`
-    INSERT INTO playlists (name, description, spotify_id)
-    VALUES (@name, @description, @spotify_id)
+    INSERT INTO playlists (name, description, spotify_id, user_id)
+    VALUES (@name, @description, @spotify_id, @user_id)
     ON CONFLICT(spotify_id) DO UPDATE SET
       name = excluded.name,
       description = excluded.description,
@@ -182,6 +222,7 @@ export function insertPlaylist(playlist: { name: string; description?: string; s
     name: playlist.name,
     description: playlist.description || '',
     spotify_id: playlist.spotify_id || null,
+    user_id: playlist.user_id ?? null,
   })
   if (result.changes === 0) {
     const row = db.prepare('SELECT id FROM playlists WHERE spotify_id = ?').get(playlist.spotify_id) as { id: number }
@@ -207,9 +248,45 @@ export function getPlaylistTracks(playlistId: number): TrackRow[] {
   `).all(playlistId) as TrackRow[]
 }
 
-export function addTrackToPlaylist(playlistId: number, trackId: number, position: number): void {
+export function addTrackToPlaylist(playlistId: number, trackId: number, position?: number): void {
+  const pos = position ?? getNextPlaylistPosition(playlistId)
   db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)')
-    .run(playlistId, trackId, position)
+    .run(playlistId, trackId, pos)
+}
+
+export function getNextPlaylistPosition(playlistId: number): number {
+  const row = db.prepare('SELECT MAX(position) as maxPos FROM playlist_tracks WHERE playlist_id = ?').get(playlistId) as { maxPos: number | null }
+  return (row.maxPos ?? -1) + 1
+}
+
+export function removeTrackFromPlaylist(playlistId: number, trackId: number): void {
+  db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').run(playlistId, trackId)
+  // Re-number positions
+  const tracks = db.prepare('SELECT track_id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position').all(playlistId) as { track_id: number }[]
+  const update = db.prepare('UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?')
+  const txn = db.transaction(() => {
+    tracks.forEach((t, i) => update.run(i, playlistId, t.track_id))
+  })
+  txn()
+}
+
+export function reorderPlaylistTracks(playlistId: number, trackIds: number[]): void {
+  const txn = db.transaction(() => {
+    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ?').run(playlistId)
+    const insert = db.prepare('INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)')
+    trackIds.forEach((trackId, i) => insert.run(playlistId, trackId, i))
+  })
+  txn()
+}
+
+export function updatePlaylist(id: number, fields: { name?: string; description?: string }): void {
+  const sets: string[] = ["updated_at = datetime('now')"]
+  const params: (string | number)[] = []
+  if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name) }
+  if (fields.description !== undefined) { sets.push('description = ?'); params.push(fields.description) }
+  if (sets.length === 1) return
+  params.push(id)
+  db.prepare(`UPDATE playlists SET ${sets.join(', ')} WHERE id = ?`).run(...params)
 }
 
 export function updateTrackLyrics(id: number, plain: string, synced: string, status: string): void {
@@ -230,4 +307,108 @@ export function getLibraryStats(): { tracks: number; artists: number; albums: nu
   const pending = (db.prepare("SELECT COUNT(*) as c FROM tracks WHERE download_status = 'pending'").get() as { c: number }).c
   const failed = (db.prepare("SELECT COUNT(*) as c FROM tracks WHERE download_status = 'failed'").get() as { c: number }).c
   return { tracks: total, artists, albums, downloaded, pending, failed }
+}
+
+// --- User helpers ---
+
+export interface UserRow {
+  id: number
+  username: string
+  display_name: string
+  pin_hash: string
+  created_at: string
+}
+
+export function createUser(username: string, displayName: string, pinHash: string): number {
+  const result = db.prepare('INSERT INTO users (username, display_name, pin_hash) VALUES (?, ?, ?)').run(username, displayName, pinHash)
+  return Number(result.lastInsertRowid)
+}
+
+export function getUserByUsername(username: string): UserRow | undefined {
+  return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined
+}
+
+export function getUserById(id: number): UserRow | undefined {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined
+}
+
+export function getAllUsers(): { id: number; username: string; display_name: string }[] {
+  return db.prepare('SELECT id, username, display_name FROM users ORDER BY username').all() as { id: number; username: string; display_name: string }[]
+}
+
+// --- Session helpers ---
+
+export function createSession(userId: number, token: string): void {
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, expiresAt)
+}
+
+export function getSession(token: string): { user_id: number; expires_at: string } | undefined {
+  const row = db.prepare('SELECT user_id, expires_at FROM sessions WHERE token = ?').get(token) as { user_id: number; expires_at: string } | undefined
+  if (!row) return undefined
+  if (new Date(row.expires_at) < new Date()) {
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+    return undefined
+  }
+  return row
+}
+
+export function deleteSession(token: string): void {
+  db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+}
+
+// --- Play history helpers ---
+
+export function recordPlay(userId: number, trackId: number): void {
+  db.prepare('INSERT INTO play_history (user_id, track_id) VALUES (?, ?)').run(userId, trackId)
+  // Cap at 1000 entries per user
+  db.prepare(`
+    DELETE FROM play_history WHERE id IN (
+      SELECT id FROM play_history WHERE user_id = ?
+      ORDER BY played_at DESC LIMIT -1 OFFSET 1000
+    )
+  `).run(userId)
+}
+
+export function getRecentlyPlayed(userId: number, limit = 20): TrackRow[] {
+  return db.prepare(`
+    SELECT t.* FROM tracks t
+    JOIN (
+      SELECT track_id, MAX(played_at) as last_played
+      FROM play_history WHERE user_id = ?
+      GROUP BY track_id
+      ORDER BY last_played DESC
+      LIMIT ?
+    ) ph ON ph.track_id = t.id
+    ORDER BY ph.last_played DESC
+  `).all(userId, limit) as TrackRow[]
+}
+
+export function getTopArtists(userId: number, limit = 10): { artist: string; play_count: number }[] {
+  return db.prepare(`
+    SELECT t.artist, COUNT(*) as play_count
+    FROM play_history ph
+    JOIN tracks t ON t.id = ph.track_id
+    WHERE ph.user_id = ?
+    GROUP BY t.artist
+    ORDER BY play_count DESC
+    LIMIT ?
+  `).all(userId, limit) as { artist: string; play_count: number }[]
+}
+
+export function getRandomAlbums(limit = 6): { album: string; artist: string; album_art_url: string }[] {
+  return db.prepare(`
+    SELECT album, COALESCE(NULLIF(album_artist, ''), artist) as artist, MAX(album_art_url) as album_art_url
+    FROM tracks
+    WHERE album != '' AND download_status = 'complete'
+    GROUP BY COALESCE(NULLIF(album_artist, ''), artist), album
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).all(limit) as { album: string; artist: string; album_art_url: string }[]
+}
+
+// --- Playlist with user ownership ---
+
+export function getUserPlaylists(userId: number): PlaylistRow[] {
+  return db.prepare('SELECT * FROM playlists WHERE user_id = ? OR user_id IS NULL ORDER BY name').all(userId) as PlaylistRow[]
 }

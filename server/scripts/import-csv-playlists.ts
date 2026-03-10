@@ -11,6 +11,7 @@ import path from 'path'
 import { insertTrack, insertPlaylist, addTrackToPlaylist } from '../src/db/index.js'
 import db from '../src/db/index.js'
 import { writeM3U } from '../src/services/m3u.js'
+import { normalizeArtistSeparators } from '../src/services/normalizer.js'
 import type { TrackRow } from '../src/db/index.js'
 
 const files = process.argv.slice(2).filter(f => !f.startsWith('-'))
@@ -69,6 +70,9 @@ for (const csvPath of files) {
   const albumNameIdx = idx('Album Name')
   const artistNameIdx = idx('Artist Name(s)')
   const durationIdx = idx('Duration (ms)')
+  const albumArtIdx = idx('Album Image URL')
+  const trackNumIdx = idx('Track Number')
+  const discNumIdx = idx('Disc Number')
 
   if (trackNameIdx < 0 || artistNameIdx < 0) {
     console.log(`Invalid CSV format: ${resolved}`)
@@ -90,31 +94,64 @@ for (const csvPath of files) {
     description: `Imported from Exportify CSV`,
   })
 
-  let imported = 0
+  // First pass: collect tracks per album to detect compilations (3+ different artists = Various Artists)
+  interface CsvTrack { title: string; artist: string; album: string; durationMs: number; spotifyId: string; albumArtUrl: string; trackNum: number; discNum: number }
+  const csvTracks: CsvTrack[] = []
+  const albumArtists = new Map<string, Set<string>>()
+
   for (let i = 1; i < lines.length; i++) {
     const fields = parseCsvLine(lines[i])
     const title = fields[trackNameIdx]
     const album = fields[albumNameIdx] || ''
-    const artist = fields[artistNameIdx] || ''
+    const rawArtist = fields[artistNameIdx] || ''
+    const artist = normalizeArtistSeparators(rawArtist)
     const durationMs = parseInt(fields[durationIdx]) || 0
     const spotifyUri = fields[trackUriIdx] || ''
     const spotifyId = spotifyUri.replace('spotify:track:', '')
+    const albumArtUrl = albumArtIdx >= 0 ? (fields[albumArtIdx] || '') : ''
+    const trackNum = trackNumIdx >= 0 ? (parseInt(fields[trackNumIdx]) || 0) : 0
+    const discNum = discNumIdx >= 0 ? (parseInt(fields[discNumIdx]) || 1) : 1
 
     if (!title || !artist) continue
 
+    csvTracks.push({ title, artist, album, durationMs, spotifyId, albumArtUrl, trackNum, discNum })
+
+    if (album) {
+      if (!albumArtists.has(album)) albumArtists.set(album, new Set())
+      albumArtists.get(album)!.add(artist.split(' / ')[0].split(',')[0].trim().toLowerCase())
+    }
+  }
+
+  // Detect compilation albums (3+ unique artists)
+  const compilationAlbums = new Set<string>()
+  for (const [album, artists] of albumArtists) {
+    if (artists.size >= 3) compilationAlbums.add(album)
+  }
+
+  let imported = 0
+  for (let i = 0; i < csvTracks.length; i++) {
+    const t = csvTracks[i]
+    const isCompilation = compilationAlbums.has(t.album)
+    const albumArtist = isCompilation ? 'Various Artists' : t.artist
+
     const trackId = insertTrack({
-      title,
-      artist,
-      album,
-      album_artist: artist, // CSV doesn't separate album artist
-      track_number: 0,
-      disc_number: 1,
-      duration_ms: durationMs,
-      spotify_id: spotifyId || undefined,
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      album_artist: albumArtist,
+      track_number: t.trackNum,
+      disc_number: t.discNum,
+      duration_ms: t.durationMs,
+      spotify_id: t.spotifyId || undefined,
+      album_art_url: t.albumArtUrl || undefined,
     })
 
-    addTrackToPlaylist(dbPlaylistId, trackId, i - 1)
+    addTrackToPlaylist(dbPlaylistId, trackId, i)
     imported++
+  }
+
+  if (compilationAlbums.size > 0) {
+    console.log(`  Compilations detected: ${[...compilationAlbums].join(', ')}`)
   }
 
   // Write M3U with any already-downloaded tracks

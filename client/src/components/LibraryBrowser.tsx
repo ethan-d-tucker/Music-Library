@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
-import { ChevronLeft, Music, Disc3, User, Search, Loader2 } from 'lucide-react'
+import { ChevronLeft, Disc3, User, Search, Loader2, Play, Shuffle, MoreHorizontal, Pencil, ListPlus, ListMusic } from 'lucide-react'
 import { useAppStore } from '../lib/store.ts'
+import { usePlayerStore } from '../lib/player.ts'
+import { MetadataEditor } from './MetadataEditor.tsx'
+import { AddToPlaylistModal } from './AddToPlaylistModal.tsx'
 import {
   getArtists, getAlbumsByArtist, getAlbumTracks, getLibraryStats,
   getAllLibraryAlbums, getAllTracks, searchLibrary,
@@ -17,10 +20,8 @@ function StatusDot({ status }: { status: string }) {
   if (status === 'downloading') {
     return <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />
   }
-  const color =
-    status === 'complete' ? 'bg-[var(--color-success)]' :
-    status === 'failed' ? 'bg-[var(--color-danger)]' :
-    'bg-[var(--color-warning)]'
+  if (status === 'complete') return null
+  const color = status === 'failed' ? 'bg-[var(--color-danger)]' : 'bg-[var(--color-warning)]'
   return <span className={`inline-block w-2 h-2 rounded-full ${color}`} title={status} />
 }
 
@@ -33,7 +34,35 @@ function useDebounce(value: string, delay: number) {
   return debounced
 }
 
-// --- Artists Tab (existing drill-down) ---
+// --- Album Art Component ---
+
+function AlbumArt({ url, trackId, size = 'md', className = '' }: {
+  url?: string; trackId?: number; size?: 'sm' | 'md' | 'lg'; className?: string
+}) {
+  const sizeClass = size === 'sm' ? 'w-10 h-10' : size === 'md' ? 'w-full aspect-square' : 'w-full aspect-square'
+  const src = trackId ? `/api/stream/art/${trackId}` : url
+  if (!src) {
+    return (
+      <div className={`${sizeClass} rounded-md bg-[var(--color-surface-2)] flex items-center justify-center ${className}`}>
+        <Disc3 size={size === 'sm' ? 18 : 40} className="text-[var(--color-text-muted)] opacity-50" />
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      className={`${sizeClass} rounded-md object-cover bg-[var(--color-surface-2)] ${className}`}
+      onError={(e) => {
+        const img = e.target as HTMLImageElement
+        img.style.display = 'none'
+        img.parentElement?.classList.add('art-fallback')
+      }}
+    />
+  )
+}
+
+// --- Artists Tab ---
 
 function ArtistsView() {
   const selectedArtist = useAppStore((s) => s.selectedArtist)
@@ -59,80 +88,142 @@ function ArtistsView() {
 
   if (loading) return <p className="text-[var(--color-text-muted)]">Loading...</p>
 
-  if ((selectedArtist || selectedAlbum)) {
+  // Album detail view
+  if (selectedArtist && selectedAlbum) {
+    return (
+      <AlbumDetailView
+        artist={selectedArtist}
+        album={selectedAlbum}
+        tracks={tracks}
+        onBack={() => setSelectedAlbum(null)}
+      />
+    )
+  }
+
+  // Artist detail view — album grid
+  if (selectedArtist) {
     return (
       <div>
         <button
-          onClick={() => selectedAlbum ? setSelectedAlbum(null) : setSelectedArtist(null)}
-          className="mb-4 flex items-center gap-1 text-sm text-[var(--color-accent)] hover:underline"
+          onClick={() => setSelectedArtist(null)}
+          className="mb-4 flex items-center gap-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
           <ChevronLeft size={16} /> Back
         </button>
 
-        {!selectedAlbum ? (
-          <div>
-            <h3 className="text-lg font-semibold mb-3">{selectedArtist}</h3>
-            <div className="grid gap-2">
-              {albums.map((a) => (
-                <button
-                  key={a.album}
-                  onClick={() => setSelectedAlbum(a.album)}
-                  className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
-                >
-                  {a.album_art_url ? (
-                    <img src={a.album_art_url} alt="" className="w-10 h-10 rounded object-cover" />
-                  ) : (
-                    <Disc3 size={18} className="text-[var(--color-text-muted)]" />
-                  )}
-                  <span className="flex-1">{a.album || 'Singles'}</span>
-                  <span className="text-sm text-[var(--color-text-muted)]">{a.track_count} tracks</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div>
-            <h3 className="text-lg font-semibold mb-1">{selectedArtist}</h3>
-            <h4 className="text-sm text-[var(--color-text-muted)] mb-4">{selectedAlbum}</h4>
-            <div className="space-y-1">
-              {tracks.map((t) => (
-                <div key={t.id} className="flex items-center gap-3 rounded-lg px-4 py-2 hover:bg-[var(--color-surface)] transition-colors">
-                  <span className="w-6 text-right text-sm text-[var(--color-text-muted)]">{t.track_number || ''}</span>
-                  <Music size={16} className="text-[var(--color-text-muted)]" />
-                  <div className="flex-1 min-w-0">
-                    <span className="block truncate">{t.title}</span>
-                    {t.artist !== selectedArtist && (
-                      <span className="block text-sm text-[var(--color-text-muted)] truncate">{t.artist}</span>
-                    )}
+        <h2 className="text-2xl font-bold mb-6">{selectedArtist}</h2>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {albums.map((a) => (
+            <button
+              key={a.album}
+              onClick={() => setSelectedAlbum(a.album)}
+              className="group text-left rounded-lg p-3 hover:bg-[var(--color-surface)] transition-colors"
+            >
+              <div className="relative mb-3">
+                <AlbumArt url={a.album_art_url} className="shadow-lg" />
+                <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center shadow-lg">
+                    <Play size={18} className="text-white ml-0.5" fill="white" />
                   </div>
-                  <StatusDot status={t.download_status} />
-                  <span className="text-sm text-[var(--color-text-muted)]">{formatDuration(t.duration_ms)}</span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+              </div>
+              <p className="font-medium text-sm truncate">{a.album || 'Singles'}</p>
+              <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{a.track_count} tracks</p>
+            </button>
+          ))}
+        </div>
       </div>
     )
   }
 
+  // Artist grid
   return (
-    <div className="grid gap-2">
+    <div>
       {artists.length === 0 ? (
-        <p className="text-[var(--color-text-muted)]">No music yet. Import from Spotify or search YouTube to get started.</p>
+        <p className="text-[var(--color-text-muted)]">No music yet. Import from Spotify or search to get started.</p>
       ) : (
-        artists.map((a) => (
-          <button
-            key={a.artist}
-            onClick={() => setSelectedArtist(a.artist)}
-            className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <User size={18} className="text-[var(--color-text-muted)]" />
-            <span className="flex-1">{a.artist}</span>
-            <span className="text-sm text-[var(--color-text-muted)]">{a.track_count} tracks</span>
-          </button>
-        ))
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {artists.map((a) => (
+            <button
+              key={a.artist}
+              onClick={() => setSelectedArtist(a.artist)}
+              className="group text-left rounded-lg p-3 hover:bg-[var(--color-surface)] transition-colors"
+            >
+              <div className="w-full aspect-square rounded-full bg-[var(--color-surface-2)] flex items-center justify-center mb-3 shadow-lg overflow-hidden">
+                <User size={40} className="text-[var(--color-text-muted)] opacity-50" />
+              </div>
+              <p className="font-medium text-sm truncate text-center">{a.artist}</p>
+              <p className="text-xs text-[var(--color-text-muted)] text-center mt-0.5">{a.track_count} tracks</p>
+            </button>
+          ))}
+        </div>
       )}
+    </div>
+  )
+}
+
+// --- Album Detail View ---
+
+function AlbumDetailView({ artist, album, tracks, onBack }: {
+  artist: string; album: string; tracks: TrackRow[]; onBack: () => void
+}) {
+  const playAlbum = usePlayerStore((s) => s.playAlbum)
+
+  const playable = tracks.filter((t) => t.download_status === 'complete')
+  const artTrack = tracks.find((t) => t.album_art_url || t.download_status === 'complete')
+  const totalDuration = tracks.reduce((sum, t) => sum + t.duration_ms, 0)
+  const totalMins = Math.floor(totalDuration / 60000)
+
+  return (
+    <div>
+      <button
+        onClick={onBack}
+        className="mb-4 flex items-center gap-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+      >
+        <ChevronLeft size={16} /> Back
+      </button>
+
+      {/* Album header */}
+      <div className="flex flex-col sm:flex-row gap-6 mb-6">
+        <div className="w-48 h-48 sm:w-56 sm:h-56 flex-shrink-0 mx-auto sm:mx-0">
+          <AlbumArt
+            url={artTrack?.album_art_url}
+            trackId={artTrack?.id}
+            size="lg"
+            className="shadow-2xl rounded-lg"
+          />
+        </div>
+        <div className="flex flex-col justify-end">
+          <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider mb-1">Album</p>
+          <h2 className="text-2xl md:text-3xl font-bold mb-2">{album}</h2>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {artist} &middot; {tracks.length} songs &middot; {totalMins} min
+          </p>
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              onClick={() => playAlbum(playable)}
+              disabled={playable.length === 0}
+              className="flex items-center gap-2 rounded-full bg-[var(--color-accent)] px-6 py-2.5 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-50"
+            >
+              <Play size={18} fill="white" /> Play
+            </button>
+            <button
+              onClick={() => {
+                const shuffled = [...playable].sort(() => Math.random() - 0.5)
+                playAlbum(shuffled)
+              }}
+              disabled={playable.length === 0}
+              className="flex items-center gap-2 rounded-full border border-[var(--color-border)] px-5 py-2.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-text-muted)] transition-colors disabled:opacity-50"
+            >
+              <Shuffle size={16} /> Shuffle
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Track list */}
+      <TrackList tracks={tracks} contextArtist={artist} />
     </div>
   )
 }
@@ -164,37 +255,14 @@ function AlbumsView() {
   }, [selectedEntry])
 
   if (selectedEntry) {
+    if (tracksLoading) return <p className="text-[var(--color-text-muted)]">Loading...</p>
     return (
-      <div>
-        <button
-          onClick={() => setSelectedEntry(null)}
-          className="mb-4 flex items-center gap-1 text-sm text-[var(--color-accent)] hover:underline"
-        >
-          <ChevronLeft size={16} /> Back
-        </button>
-        <h3 className="text-lg font-semibold mb-1">{selectedEntry.album}</h3>
-        <h4 className="text-sm text-[var(--color-text-muted)] mb-4">{selectedEntry.artist}</h4>
-        {tracksLoading ? (
-          <p className="text-[var(--color-text-muted)]">Loading...</p>
-        ) : (
-          <div className="space-y-1">
-            {tracks.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 rounded-lg px-4 py-2 hover:bg-[var(--color-surface)] transition-colors">
-                <span className="w-6 text-right text-sm text-[var(--color-text-muted)]">{t.track_number || ''}</span>
-                <Music size={16} className="text-[var(--color-text-muted)]" />
-                <div className="flex-1 min-w-0">
-                  <span className="block truncate">{t.title}</span>
-                  {t.artist !== selectedEntry.artist && (
-                    <span className="block text-sm text-[var(--color-text-muted)] truncate">{t.artist}</span>
-                  )}
-                </div>
-                <StatusDot status={t.download_status} />
-                <span className="text-sm text-[var(--color-text-muted)]">{formatDuration(t.duration_ms)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <AlbumDetailView
+        artist={selectedEntry.artist}
+        album={selectedEntry.album}
+        tracks={tracks}
+        onBack={() => setSelectedEntry(null)}
+      />
     )
   }
 
@@ -204,10 +272,10 @@ function AlbumsView() {
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
         <input
           type="text"
-          placeholder="Filter albums..."
+          placeholder="Search albums..."
           value={filterQuery}
           onChange={(e) => setFilterQuery(e.target.value)}
-          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
+          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
         />
       </div>
       {loading ? (
@@ -215,28 +283,151 @@ function AlbumsView() {
       ) : albums.length === 0 ? (
         <p className="text-[var(--color-text-muted)]">{filterQuery ? 'No albums match your search.' : 'No albums yet.'}</p>
       ) : (
-        <div className="grid gap-2 max-h-[70vh] overflow-y-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {albums.map((a) => (
             <button
               key={`${a.artist}|||${a.album}`}
               onClick={() => setSelectedEntry({ artist: a.artist, album: a.album })}
-              className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
+              className="group text-left rounded-lg p-3 hover:bg-[var(--color-surface)] transition-colors"
             >
-              {a.album_art_url ? (
-                <img src={a.album_art_url} alt="" className="w-10 h-10 rounded object-cover" />
-              ) : (
-                <Disc3 size={18} className="text-[var(--color-text-muted)]" />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{a.album}</div>
-                <div className="text-sm text-[var(--color-text-muted)] truncate">{a.artist}</div>
+              <div className="relative mb-3">
+                <AlbumArt url={a.album_art_url} className="shadow-lg" />
+                <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center shadow-lg">
+                    <Play size={18} className="text-white ml-0.5" fill="white" />
+                  </div>
+                </div>
               </div>
-              <span className="text-sm text-[var(--color-text-muted)]">{a.track_count} tracks</span>
+              <p className="font-medium text-sm truncate">{a.album}</p>
+              <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">{a.artist}</p>
             </button>
           ))}
         </div>
       )}
     </div>
+  )
+}
+
+// --- Shared Track List with play support ---
+
+function TrackList({ tracks, contextArtist }: { tracks: TrackRow[]; contextArtist?: string }) {
+  const playTrack = usePlayerStore((s) => s.playTrack)
+  const addToQueue = usePlayerStore((s) => s.addToQueue)
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const isPlaying = usePlayerStore((s) => s.isPlaying)
+  const [editingTrack, setEditingTrack] = useState<TrackRow | null>(null)
+  const [menuTrackId, setMenuTrackId] = useState<number | null>(null)
+  const [addToPlaylistTrackId, setAddToPlaylistTrackId] = useState<number | null>(null)
+
+  const playable = tracks.filter((t) => t.download_status === 'complete')
+
+  function handlePlay(track: TrackRow) {
+    if (track.download_status !== 'complete') return
+    playTrack(track, playable)
+  }
+
+  return (
+    <>
+      <div className="space-y-0.5">
+        {tracks.map((t, i) => {
+          const isCurrent = currentTrack?.id === t.id
+          const canPlay = t.download_status === 'complete'
+          return (
+            <div
+              key={t.id}
+              className={`flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors group ${
+                isCurrent ? 'bg-[var(--color-accent-dim)]' : 'hover:bg-[var(--color-surface)]'
+              } ${!canPlay ? 'opacity-40' : ''}`}
+            >
+              {/* Track number / play button */}
+              <button
+                onClick={() => handlePlay(t)}
+                disabled={!canPlay}
+                className="w-6 text-center text-sm text-[var(--color-text-muted)] flex-shrink-0"
+              >
+                {isCurrent && isPlaying ? (
+                  <span className="text-[var(--color-accent)] text-xs">&#9835;</span>
+                ) : canPlay ? (
+                  <>
+                    <span className="group-hover:hidden">{t.track_number || i + 1}</span>
+                    <Play size={14} fill="currentColor" className="hidden group-hover:inline text-white" />
+                  </>
+                ) : (
+                  t.track_number || i + 1
+                )}
+              </button>
+
+              {/* Title and artist — clickable to play */}
+              <button
+                onClick={() => handlePlay(t)}
+                disabled={!canPlay}
+                className="flex-1 min-w-0 text-left"
+              >
+                <span className={`block text-sm truncate ${isCurrent ? 'text-[var(--color-accent)] font-medium' : 'text-[var(--color-text)]'}`}>
+                  {t.title}
+                </span>
+                {t.artist !== contextArtist && (
+                  <span className="block text-xs text-[var(--color-text-muted)] truncate">{t.artist}</span>
+                )}
+              </button>
+
+              <StatusDot status={t.download_status} />
+              <span className="text-xs text-[var(--color-text-muted)] flex-shrink-0 tabular-nums">{formatDuration(t.duration_ms)}</span>
+
+              {/* Three-dot menu */}
+              <div className="relative flex-shrink-0">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuTrackId(menuTrackId === t.id ? null : t.id) }}
+                  className="p-1 text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-text)] transition-all"
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+                {menuTrackId === t.id && (
+                  <div className="absolute right-0 top-8 z-50 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl py-1">
+                    <button
+                      onClick={() => { setEditingTrack(t); setMenuTrackId(null) }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    >
+                      <Pencil size={14} /> Edit Metadata
+                    </button>
+                    {canPlay && (
+                      <>
+                        <button
+                          onClick={() => { addToQueue(t); setMenuTrackId(null) }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+                        >
+                          <ListPlus size={14} /> Add to Queue
+                        </button>
+                        <button
+                          onClick={() => { setAddToPlaylistTrackId(t.id); setMenuTrackId(null) }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface-2)] transition-colors"
+                        >
+                          <ListMusic size={14} /> Add to Playlist
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {editingTrack && (
+        <MetadataEditor
+          track={editingTrack}
+          onClose={() => setEditingTrack(null)}
+        />
+      )}
+
+      {addToPlaylistTrackId !== null && (
+        <AddToPlaylistModal
+          trackId={addToPlaylistTrackId}
+          onClose={() => setAddToPlaylistTrackId(null)}
+        />
+      )}
+    </>
   )
 }
 
@@ -264,40 +455,18 @@ function SongsView() {
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
         <input
           type="text"
-          placeholder="Filter songs..."
+          placeholder="Search songs..."
           value={filterQuery}
           onChange={(e) => setFilterQuery(e.target.value)}
-          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
+          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
         />
       </div>
       {loading ? (
         <p className="text-[var(--color-text-muted)]">Loading...</p>
       ) : tracks.length === 0 ? (
-        <p className="text-[var(--color-text-muted)]">{filterQuery ? 'No songs match your search.' : 'No songs yet.'}</p>
+        <p className="text-[var(--color-text-muted)]">{filterQuery ? 'No songs match.' : 'No songs yet.'}</p>
       ) : (
-        <div className="max-h-[70vh] overflow-y-auto">
-          {/* Desktop header */}
-          <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_3rem_3.5rem] gap-x-4 px-4 py-2 text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide border-b border-[var(--color-border)]">
-            <span>Title</span>
-            <span>Artist</span>
-            <span>Album</span>
-            <span className="text-center">Status</span>
-            <span className="text-right">Duration</span>
-          </div>
-          <div className="space-y-0.5">
-            {tracks.map((t) => (
-              <div key={t.id} className="flex md:grid md:grid-cols-[2fr_1fr_1fr_3rem_3.5rem] gap-x-4 items-center rounded-lg px-3 md:px-4 py-2 hover:bg-[var(--color-surface)] transition-colors">
-                <div className="flex-1 min-w-0 md:contents">
-                  <div className="truncate">{t.title}</div>
-                  <div className="text-sm text-[var(--color-text-muted)] truncate">{t.artist} <span className="md:hidden">· {t.album}</span></div>
-                  <span className="hidden md:block truncate text-sm text-[var(--color-text-muted)]">{t.album}</span>
-                </div>
-                <span className="text-center shrink-0 mx-2 md:mx-0"><StatusDot status={t.download_status} /></span>
-                <span className="text-sm text-[var(--color-text-muted)] text-right shrink-0">{formatDuration(t.duration_ms)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <TrackList tracks={tracks} />
       )}
     </div>
   )
@@ -315,13 +484,12 @@ export function LibraryBrowser() {
 
   return (
     <div>
-      <div className="mb-4">
-        <h2 className="text-xl font-bold">Library</h2>
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold">Library</h2>
         {stats && (
           <p className="text-sm text-[var(--color-text-muted)] mt-1">
-            {stats.downloaded} downloaded / {stats.artists} artists / {stats.albums} albums
-            {stats.pending > 0 && <span className="text-[var(--color-warning)]"> / {stats.pending} pending</span>}
-            {stats.failed > 0 && <span className="text-[var(--color-danger)]"> / {stats.failed} failed</span>}
+            {stats.downloaded.toLocaleString()} songs &middot; {stats.artists} artists &middot; {stats.albums} albums
+            {stats.pending > 0 && <span className="text-[var(--color-warning)]"> &middot; {stats.pending} pending</span>}
           </p>
         )}
       </div>

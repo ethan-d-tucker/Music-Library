@@ -7,6 +7,9 @@ import spotifyRouter from './routes/spotify.js'
 import downloadRouter from './routes/download.js'
 import libraryRouter from './routes/library.js'
 import playlistsRouter from './routes/playlists.js'
+import streamRouter from './routes/stream.js'
+import authRouter from './routes/auth.js'
+import { optionalAuth } from './middleware/auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const clientDist = path.join(__dirname, '../../client/dist')
@@ -16,10 +19,12 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-app.use('/api/spotify', spotifyRouter)
-app.use('/api/download', downloadRouter)
-app.use('/api/library', libraryRouter)
-app.use('/api/playlists', playlistsRouter)
+app.use('/api/auth', authRouter)
+app.use('/api/stream', streamRouter)
+app.use('/api/spotify', optionalAuth, spotifyRouter)
+app.use('/api/download', optionalAuth, downloadRouter)
+app.use('/api/library', optionalAuth, libraryRouter)
+app.use('/api/playlists', optionalAuth, playlistsRouter)
 
 app.get('/api/health', (_req, res) => {
   res.json({

@@ -1,7 +1,13 @@
 import { create } from 'zustand'
 
-export type Page = 'library' | 'import' | 'search' | 'playlists' | 'downloads'
+export type Page = 'home' | 'library' | 'import' | 'search' | 'playlists' | 'downloads'
 export type LibraryTab = 'artists' | 'albums' | 'songs'
+
+export interface AuthUser {
+  id: number
+  username: string
+  displayName: string
+}
 
 interface AppState {
   page: Page
@@ -22,10 +28,18 @@ interface AppState {
   // Selected playlist
   selectedPlaylistId: number | null
   setSelectedPlaylistId: (id: number | null) => void
+
+  // Auth
+  currentUser: AuthUser | null
+  authToken: string | null
+  setAuth: (user: AuthUser, token: string) => void
+  clearAuth: () => void
+  authLoading: boolean
+  setAuthLoading: (loading: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  page: 'library',
+  page: 'home',
   setPage: (page) => set({ page, libraryTab: 'artists', selectedArtist: null, selectedAlbum: null, selectedPlaylistId: null }),
 
   libraryTab: 'artists',
@@ -41,4 +55,17 @@ export const useAppStore = create<AppState>((set) => ({
 
   selectedPlaylistId: null,
   setSelectedPlaylistId: (id) => set({ selectedPlaylistId: id }),
+
+  currentUser: null,
+  authToken: localStorage.getItem('authToken'),
+  setAuth: (user, token) => {
+    localStorage.setItem('authToken', token)
+    set({ currentUser: user, authToken: token })
+  },
+  clearAuth: () => {
+    localStorage.removeItem('authToken')
+    set({ currentUser: null, authToken: null })
+  },
+  authLoading: true,
+  setAuthLoading: (loading) => set({ authLoading: loading }),
 }))

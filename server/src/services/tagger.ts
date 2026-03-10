@@ -1,4 +1,6 @@
 import NodeID3 from 'node-id3'
+import path from 'path'
+import { writeFlacTags, normalizeArtist, normalizeArtistSeparators } from './normalizer.js'
 
 export interface TagData {
   title: string
@@ -12,13 +14,29 @@ export interface TagData {
 }
 
 export async function tagFile(filePath: string, tags: TagData): Promise<void> {
+  const ext = path.extname(filePath).toLowerCase()
+
+  if (ext === '.flac') {
+    await tagFlacFile(filePath, tags)
+  } else {
+    await tagMp3File(filePath, tags)
+  }
+}
+
+async function tagMp3File(filePath: string, tags: TagData): Promise<void> {
+  // Normalize artist: convert semicolons to " / " for Navidrome splitting, then apply alias fixes
+  const normalizedArtist = normalizeArtist(normalizeArtistSeparators(tags.artist))
+  const normalizedAlbumArtist = tags.albumArtist
+    ? normalizeArtist(normalizeArtistSeparators(tags.albumArtist))
+    : undefined
+
   const id3Tags: NodeID3.Tags = {
     title: tags.title,
-    artist: tags.artist,
+    artist: normalizedArtist,
     album: tags.album,
     trackNumber: tags.trackNumber,
     partOfSet: tags.partOfSet || '1',
-    performerInfo: tags.albumArtist || undefined,
+    performerInfo: normalizedAlbumArtist || undefined,
   }
 
   // Fetch and embed album art if URL provided
@@ -50,4 +68,19 @@ export async function tagFile(filePath: string, tags: TagData): Promise<void> {
   if (success !== true) {
     throw new Error(`Failed to write ID3 tags to ${filePath}`)
   }
+}
+
+async function tagFlacFile(filePath: string, tags: TagData): Promise<void> {
+  const normalizedArtist = normalizeArtist(normalizeArtistSeparators(tags.artist))
+  const normalizedAlbumArtist = tags.albumArtist
+    ? normalizeArtist(normalizeArtistSeparators(tags.albumArtist))
+    : undefined
+
+  await writeFlacTags(filePath, {
+    artist: normalizedArtist,
+    album: tags.album,
+    title: tags.title,
+    trackNumber: parseInt(tags.trackNumber) || 0,
+    albumArtist: normalizedAlbumArtist,
+  })
 }

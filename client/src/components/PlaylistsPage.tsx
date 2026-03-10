@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronLeft, Download, Music, Trash2, Loader2, Check, AlertCircle, CheckSquare, Square } from 'lucide-react'
+import {
+  ChevronLeft, Download, Music, Trash2, Loader2, Check, AlertCircle,
+  CheckSquare, Square, Plus, Play, Shuffle, Pencil, X, ChevronUp, ChevronDown,
+} from 'lucide-react'
 import { useAppStore } from '../lib/store.ts'
-import { getPlaylists, getPlaylistDetail, exportPlaylistM3U, deletePlaylist, downloadTrack, startBatchDownload, type PlaylistWithCount, type TrackRow } from '../lib/api.ts'
+import { usePlayerStore } from '../lib/player.ts'
+import {
+  getPlaylists, getPlaylistDetail, exportPlaylistM3U, deletePlaylist,
+  downloadTrack, startBatchDownload, createPlaylist, renamePlaylist,
+  removeTrackFromPlaylist, reorderPlaylistTracks,
+  type PlaylistWithCount, type TrackRow,
+} from '../lib/api.ts'
 
 export function PlaylistsPage() {
   const selectedId = useAppStore((s) => s.selectedPlaylistId)
@@ -18,6 +27,14 @@ export function PlaylistsPage() {
     total: number; completed: number; failed: number; current: string; done: boolean
   } | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+
+  // Create playlist state
+  const [showCreate, setShowCreate] = useState(false)
+  const [newPlaylistName, setNewPlaylistName] = useState('')
+
+  // Rename state
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
 
   useEffect(() => {
     if (!selectedId) {
@@ -41,7 +58,6 @@ export function PlaylistsPage() {
         setBatchJobId(null)
         setDownloadingIds(new Set())
         setSelectedTracks(new Set())
-        // Refresh track list to show updated statuses
         if (selectedId) loadPlaylistDetail()
       }
     }
@@ -69,7 +85,6 @@ export function PlaylistsPage() {
     setDownloadingIds((prev) => new Set(prev).add(trackId))
     try {
       await downloadTrack(trackId)
-      // Refresh to show updated status
       loadPlaylistDetail()
     } catch (err) {
       console.error(err)
@@ -130,29 +145,135 @@ export function PlaylistsPage() {
     try {
       await deletePlaylist(id)
       setPlaylists((prev) => prev.filter((p) => p.id !== id))
+      if (selectedId === id) setSelectedId(null)
     } catch (err) {
       console.error(err)
     }
   }
+
+  async function handleCreatePlaylist() {
+    if (!newPlaylistName.trim()) return
+    try {
+      await createPlaylist(newPlaylistName.trim())
+      setNewPlaylistName('')
+      setShowCreate(false)
+      getPlaylists().then((r) => setPlaylists(r.playlists)).catch(console.error)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function handleRename() {
+    if (!selectedId || !renameValue.trim()) return
+    try {
+      await renamePlaylist(selectedId, renameValue.trim())
+      setPlaylistName(renameValue.trim())
+      setRenaming(false)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function handleRemoveTrack(trackId: number) {
+    if (!selectedId) return
+    try {
+      await removeTrackFromPlaylist(selectedId, trackId)
+      setTracks((prev) => prev.filter((t) => t.id !== trackId))
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function handleMoveTrack(index: number, direction: 'up' | 'down') {
+    if (!selectedId) return
+    const newTracks = [...tracks]
+    const swapIndex = direction === 'up' ? index - 1 : index + 1
+    if (swapIndex < 0 || swapIndex >= newTracks.length) return
+    ;[newTracks[index], newTracks[swapIndex]] = [newTracks[swapIndex], newTracks[index]]
+    setTracks(newTracks)
+    try {
+      await reorderPlaylistTracks(selectedId, newTracks.map((t) => t.id))
+    } catch (err) {
+      console.error(err)
+      loadPlaylistDetail() // revert on error
+    }
+  }
+
+  // Player controls
+  const playPlaylist = usePlayerStore((s) => s.playPlaylist)
+  const playTrack = usePlayerStore((s) => s.playTrack)
+  const currentTrack = usePlayerStore((s) => s.currentTrack)
 
   if (loading) return <p className="text-[var(--color-text-muted)]">Loading...</p>
 
   if (selectedId) {
     const pendingTracks = tracks.filter((t) => t.download_status === 'pending' || t.download_status === 'failed')
     const hasSelectable = pendingTracks.length > 0
+    const playable = tracks.filter((t) => t.download_status === 'complete')
 
     return (
       <div>
         <button
-          onClick={() => { setSelectedId(null); setSelectedTracks(new Set()) }}
+          onClick={() => { setSelectedId(null); setSelectedTracks(new Set()); setRenaming(false) }}
           className="mb-4 flex items-center gap-1 text-sm text-[var(--color-accent)] hover:underline"
         >
           <ChevronLeft size={16} /> Back
         </button>
-        <div className="flex items-center gap-3 mb-4">
-          <h2 className="text-xl font-bold">{playlistName}</h2>
+
+        {/* Playlist header */}
+        <div className="mb-4">
+          {renaming ? (
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                autoFocus
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+                className="flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-lg font-bold outline-none focus:border-[var(--color-accent)]"
+              />
+              <button onClick={handleRename} className="text-[var(--color-accent)] text-sm font-medium">Save</button>
+              <button onClick={() => setRenaming(false)} className="text-[var(--color-text-muted)] text-sm">Cancel</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 mb-2">
+              <h2 className="text-xl font-bold">{playlistName}</h2>
+              <button
+                onClick={() => { setRenaming(true); setRenameValue(playlistName) }}
+                className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          )}
+
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">
+            {tracks.length} tracks &middot; {playable.length} downloaded
+          </p>
+
+          {/* Play/Shuffle buttons */}
+          {playable.length > 0 && (
+            <div className="flex items-center gap-3 mb-4">
+              <button
+                onClick={() => playPlaylist(playable)}
+                className="flex items-center gap-2 rounded-full bg-[var(--color-accent)] px-6 py-2.5 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors"
+              >
+                <Play size={18} fill="white" /> Play
+              </button>
+              <button
+                onClick={() => {
+                  const shuffled = [...playable].sort(() => Math.random() - 0.5)
+                  playPlaylist(shuffled)
+                }}
+                className="flex items-center gap-2 rounded-full border border-[var(--color-border)] px-5 py-2.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-text-muted)] transition-colors"
+              >
+                <Shuffle size={16} /> Shuffle
+              </button>
+            </div>
+          )}
+
           {hasSelectable && (
-            <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <button
                 onClick={selectAllPending}
                 className="text-sm text-[var(--color-accent)] hover:underline"
@@ -194,11 +315,14 @@ export function PlaylistsPage() {
             const isPending = t.download_status === 'pending' || t.download_status === 'failed'
             const isDownloading = downloadingIds.has(t.id)
             const isComplete = t.download_status === 'complete'
+            const isCurrent = currentTrack?.id === t.id
 
             return (
               <div
                 key={t.id}
-                className="flex items-center gap-3 rounded-lg px-4 py-2 hover:bg-[var(--color-surface)] transition-colors"
+                className={`flex items-center gap-3 rounded-lg px-4 py-2 transition-colors group ${
+                  isCurrent ? 'bg-[var(--color-accent-dim)]' : 'hover:bg-[var(--color-surface)]'
+                }`}
               >
                 {/* Selection checkbox for pending/failed tracks */}
                 {isPending && !isDownloading ? (
@@ -212,11 +336,26 @@ export function PlaylistsPage() {
                 )}
 
                 <span className="w-6 text-right text-sm text-[var(--color-text-muted)]">{i + 1}</span>
-                <Music size={16} className="text-[var(--color-text-muted)]" />
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{t.title}</div>
-                  <div className="text-sm text-[var(--color-text-muted)] truncate">{t.artist}</div>
-                </div>
+
+                {/* Album art thumbnail */}
+                {isComplete && (
+                  <img
+                    src={`/api/stream/art/${t.id}`}
+                    alt=""
+                    className="w-10 h-10 rounded object-cover bg-[var(--color-surface-2)] flex-shrink-0"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
+                )}
+                {!isComplete && <Music size={16} className="text-[var(--color-text-muted)]" />}
+
+                <button
+                  onClick={() => isComplete && playTrack(t, playable)}
+                  disabled={!isComplete}
+                  className="flex-1 min-w-0 text-left"
+                >
+                  <div className={`truncate text-sm ${isCurrent ? 'text-[var(--color-accent)] font-medium' : ''}`}>{t.title}</div>
+                  <div className="text-xs text-[var(--color-text-muted)] truncate">{t.artist}</div>
+                </button>
 
                 {/* Status/action */}
                 {isDownloading ? (
@@ -241,7 +380,34 @@ export function PlaylistsPage() {
                   </button>
                 )}
 
-                <span className="text-sm text-[var(--color-text-muted)]">{formatDuration(t.duration_ms)}</span>
+                <span className="text-sm text-[var(--color-text-muted)] tabular-nums">{formatDuration(t.duration_ms)}</span>
+
+                {/* Reorder buttons */}
+                <div className="flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => handleMoveTrack(i, 'up')}
+                    disabled={i === 0}
+                    className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-20"
+                  >
+                    <ChevronUp size={12} />
+                  </button>
+                  <button
+                    onClick={() => handleMoveTrack(i, 'down')}
+                    disabled={i === tracks.length - 1}
+                    className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-20"
+                  >
+                    <ChevronDown size={12} />
+                  </button>
+                </div>
+
+                {/* Remove from playlist */}
+                <button
+                  onClick={() => handleRemoveTrack(t.id)}
+                  className="p-1 text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] transition-all"
+                  title="Remove from playlist"
+                >
+                  <X size={14} />
+                </button>
               </div>
             )
           })}
@@ -252,9 +418,46 @@ export function PlaylistsPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Playlists</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Playlists</h2>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors"
+        >
+          <Plus size={16} /> Create
+        </button>
+      </div>
+
+      {/* Create playlist inline */}
+      {showCreate && (
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            autoFocus
+            type="text"
+            value={newPlaylistName}
+            onChange={(e) => setNewPlaylistName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCreatePlaylist()}
+            placeholder="Playlist name"
+            className="flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+          />
+          <button
+            onClick={handleCreatePlaylist}
+            disabled={!newPlaylistName.trim()}
+            className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
+          >
+            Create
+          </button>
+          <button
+            onClick={() => { setShowCreate(false); setNewPlaylistName('') }}
+            className="text-sm text-[var(--color-text-muted)]"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {playlists.length === 0 ? (
-        <p className="text-[var(--color-text-muted)]">No playlists yet. Import from Spotify to get started.</p>
+        <p className="text-[var(--color-text-muted)]">No playlists yet. Create one or import from Spotify.</p>
       ) : (
         <div className="grid gap-2">
           {playlists.map((p) => (

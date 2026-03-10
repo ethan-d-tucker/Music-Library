@@ -61,4 +61,51 @@ export function initSchema(db: Database.Database): void {
   if (!colNames.has('lyrics_status')) {
     db.exec("ALTER TABLE tracks ADD COLUMN lyrics_status TEXT DEFAULT ''")
   }
+
+  // Migration: add Deezer and format columns
+  if (!colNames.has('deezer_id')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN deezer_id TEXT DEFAULT ''")
+  }
+  if (!colNames.has('format')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN format TEXT DEFAULT 'mp3'")
+  }
+
+  // Migration: add year column
+  if (!colNames.has('year')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN year INTEGER DEFAULT 0")
+  }
+
+  // Migration: users and auth tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      username        TEXT NOT NULL UNIQUE,
+      display_name    TEXT NOT NULL,
+      pin_hash        TEXT NOT NULL,
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token           TEXT PRIMARY KEY,
+      user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      created_at      TEXT DEFAULT (datetime('now')),
+      expires_at      TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS play_history (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      track_id        INTEGER REFERENCES tracks(id) ON DELETE CASCADE,
+      played_at       TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_play_history_user ON play_history(user_id, played_at DESC);
+  `)
+
+  // Migration: add user_id to playlists
+  const playlistCols = db.pragma('table_info(playlists)') as { name: string }[]
+  const playlistColNames = new Set(playlistCols.map(c => c.name))
+  if (!playlistColNames.has('user_id')) {
+    db.exec("ALTER TABLE playlists ADD COLUMN user_id INTEGER DEFAULT NULL")
+  }
 }

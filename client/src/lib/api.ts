@@ -1,7 +1,13 @@
 // Typed API wrappers
 
+function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('authToken')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options)
+  const headers = { ...getAuthHeaders(), ...options?.headers }
+  const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error((body as { error?: string }).error || res.statusText)
@@ -87,6 +93,26 @@ export interface ImportResult {
   tracksImported: number
 }
 
+// --- Deezer ---
+
+export interface DeezerResult {
+  id: number
+  title: string
+  artist: string
+  album: string
+  duration: number // seconds
+  albumCoverUrl: string
+  preview: string
+}
+
+export function searchDeezer(query: string) {
+  return post<{ results: DeezerResult[] }>('/api/download/search-deezer', { query })
+}
+
+export function downloadDeezerTrack(track: DeezerResult) {
+  return post<{ success: boolean; track: TrackRow; skipped?: boolean }>('/api/download/deezer', track)
+}
+
 // --- Download ---
 
 export interface SearchResult {
@@ -128,6 +154,28 @@ export function downloadFromUrl(url: string, title: string, artist: string, albu
 
 export function startBatchDownload(trackIds?: number[]) {
   return post<{ jobId: string; total: number }>('/api/download/batch', { trackIds })
+}
+
+// --- Download Management ---
+
+export function getPendingDownloads() {
+  return request<{ tracks: TrackRow[] }>('/api/download/pending')
+}
+
+export function getFailedDownloads() {
+  return request<{ tracks: TrackRow[] }>('/api/download/failed')
+}
+
+export function cancelPendingTrack(id: number) {
+  return request<{ success: boolean }>(`/api/download/pending/${id}`, { method: 'DELETE' })
+}
+
+export function cancelAllPending() {
+  return request<{ success: boolean; cancelled: number }>('/api/download/pending', { method: 'DELETE' })
+}
+
+export function retryFailedDownloads() {
+  return post<{ success: boolean; retried: number }>('/api/download/retry-failed', {})
 }
 
 // --- Library ---
@@ -220,4 +268,111 @@ export function exportPlaylistM3U(id: number) {
 
 export function deletePlaylist(id: number) {
   return request<{ success: boolean }>(`/api/playlists/${id}`, { method: 'DELETE' })
+}
+
+export function createPlaylist(name: string, description?: string) {
+  return post<{ id: number }>('/api/playlists', { name, description })
+}
+
+export function renamePlaylist(id: number, name: string, description?: string) {
+  return request<{ success: boolean }>(`/api/playlists/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description }),
+  })
+}
+
+export function addTrackToPlaylist(playlistId: number, trackId: number) {
+  return post<{ success: boolean }>(`/api/playlists/${playlistId}/tracks`, { trackId })
+}
+
+export function removeTrackFromPlaylist(playlistId: number, trackId: number) {
+  return request<{ success: boolean }>(`/api/playlists/${playlistId}/tracks/${trackId}`, { method: 'DELETE' })
+}
+
+export function reorderPlaylistTracks(playlistId: number, trackIds: number[]) {
+  return request<{ success: boolean }>(`/api/playlists/${playlistId}/reorder`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trackIds }),
+  })
+}
+
+// --- Lyrics ---
+
+export function getTrackLyrics(id: number) {
+  return request<{ plain: string; synced: string }>(`/api/library/tracks/${id}/lyrics`)
+}
+
+// --- Track Editing ---
+
+export function updateTrackMetadata(id: number, fields: {
+  title?: string; artist?: string; album?: string; album_artist?: string
+  track_number?: number; year?: number
+}) {
+  return request<{ success: boolean; track: TrackRow }>(`/api/library/tracks/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  })
+}
+
+export async function uploadTrackArt(id: number, file: File) {
+  const form = new FormData()
+  form.append('art', file)
+  const headers = getAuthHeaders()
+  const res = await fetch(`/api/library/tracks/${id}/art`, { method: 'PUT', body: form, headers })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error((body as { error?: string }).error || res.statusText)
+  }
+  return res.json() as Promise<{ success: boolean; track: TrackRow }>
+}
+
+// --- Auth ---
+
+export interface AuthUserResponse {
+  id: number
+  username: string
+  displayName: string
+}
+
+export function getUsers() {
+  return request<{ users: { id: number; username: string; display_name: string }[] }>('/api/auth/users')
+}
+
+export function login(username: string, pin: string) {
+  return post<{ token: string; user: AuthUserResponse }>('/api/auth/login', { username, pin })
+}
+
+export function register(username: string, displayName: string, pin: string) {
+  return post<{ token: string; user: AuthUserResponse }>('/api/auth/register', { username, displayName, pin })
+}
+
+export function getMe() {
+  return request<{ user: AuthUserResponse }>('/api/auth/me')
+}
+
+export function logout() {
+  return post<{ success: boolean }>('/api/auth/logout', {})
+}
+
+// --- Play History ---
+
+export function recordPlay(trackId: number) {
+  return post<{ success: boolean }>('/api/library/play-history', { trackId })
+}
+
+export function getPlayHistory() {
+  return request<{ tracks: TrackRow[] }>('/api/library/play-history')
+}
+
+// --- Homepage ---
+
+export function getHomeData() {
+  return request<{
+    recentlyPlayed: TrackRow[]
+    topArtists: { artist: string; play_count: number }[]
+    randomAlbums: { album: string; artist: string; album_art_url: string }[]
+  }>('/api/library/home')
 }
