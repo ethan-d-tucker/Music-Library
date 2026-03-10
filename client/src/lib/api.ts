@@ -298,6 +298,38 @@ export function reorderPlaylistTracks(playlistId: number, trackIds: number[]) {
   })
 }
 
+// --- Library Management ---
+
+export function deleteTrack(id: number) {
+  return request<{ success: boolean }>(`/api/library/tracks/${id}`, { method: 'DELETE' })
+}
+
+export function moveTrack(id: number, artist: string, album: string, album_artist?: string) {
+  return post<{ success: boolean; track: TrackRow }>(`/api/library/tracks/${id}/move`, { artist, album, album_artist })
+}
+
+export function reorderAlbumTracks(artist: string, album: string, trackIds: number[]) {
+  return request<{ success: boolean }>('/api/library/albums/reorder', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artist, album, trackIds }),
+  })
+}
+
+export function mergeAlbums(source: { artist: string; album: string }, target: { artist: string; album: string }) {
+  return post<{ success: boolean; moved: number }>('/api/library/albums/merge', { source, target })
+}
+
+// --- Unified Search ---
+
+export function searchLibraryUnified(query: string) {
+  return request<{
+    artists: { artist: string; track_count: number; album_art_url: string }[]
+    albums: { album: string; artist: string; track_count: number; album_art_url: string }[]
+    tracks: TrackRow[]
+  }>(`/api/library/search?q=${encodeURIComponent(query)}`)
+}
+
 // --- Lyrics ---
 
 export function getTrackLyrics(id: number) {
@@ -374,5 +406,7 @@ export function getHomeData() {
     recentlyPlayed: TrackRow[]
     topArtists: { artist: string; play_count: number }[]
     randomAlbums: { album: string; artist: string; album_art_url: string }[]
+    recentlyAdded: { album: string; artist: string; album_art_url: string; track_id: number }[]
+    mostPlayed: (TrackRow & { play_count: number })[]
   }>('/api/library/home')
 }

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Library, Download, Search, ListMusic, User, Disc3, Music, ArrowDownToLine, Home, LogOut } from 'lucide-react'
+import { Library, Search, ListMusic, User, Disc3, Music, Home, LogOut, Settings } from 'lucide-react'
 import { useAppStore, type Page, type LibraryTab } from '../lib/store.ts'
 import { usePlayerStore } from '../lib/player.ts'
 import { NowPlayingBar } from './NowPlayingBar.tsx'
@@ -9,9 +9,7 @@ import { logout as apiLogout } from '../lib/api.ts'
 const navItems: { page: Page; label: string; icon: typeof Library }[] = [
   { page: 'home', label: 'Home', icon: Home },
   { page: 'library', label: 'Library', icon: Library },
-  { page: 'import', label: 'Import', icon: Download },
   { page: 'search', label: 'Search', icon: Search },
-  { page: 'downloads', label: 'Downloads', icon: ArrowDownToLine },
   { page: 'playlists', label: 'Playlists', icon: ListMusic },
 ]
 
@@ -88,6 +86,20 @@ export function Layout({ children }: { children: ReactNode }) {
               </li>
             )
           })}
+          {/* Settings in sidebar */}
+          <li>
+            <button
+              onClick={() => setPage('settings')}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                page === 'settings'
+                  ? 'bg-[var(--color-accent-dim)] text-[var(--color-accent)]'
+                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
+              }`}
+            >
+              <Settings size={18} />
+              Settings
+            </button>
+          </li>
         </ul>
 
         {/* User info + logout */}
@@ -111,6 +123,24 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         )}
       </nav>
+
+      {/* Mobile: header with gear icon */}
+      <div className="md:hidden flex items-center justify-between px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+        <div className="flex items-center gap-2">
+          <img src="/grumpy-cat.svg" alt="" className="w-6 h-6" />
+          <span className="font-bold text-sm">Music Library</span>
+        </div>
+        <button
+          onClick={() => setPage('settings')}
+          className={`p-2 rounded-lg transition-colors ${
+            page === 'settings'
+              ? 'text-[var(--color-accent)]'
+              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          <Settings size={20} />
+        </button>
+      </div>
 
       {/* Mobile: library sub-tabs */}
       {page === 'library' && (
@@ -146,9 +176,9 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* Mobile bottom tab bar */}
+      {/* Mobile bottom tab bar — 4 items */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 flex border-t border-[var(--color-border)] bg-[var(--color-surface)] z-50 pb-[env(safe-area-inset-bottom)]">
-        {navItems.slice(0, 5).map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon
           const active = page === item.page
           return (

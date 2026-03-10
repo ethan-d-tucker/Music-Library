@@ -3,7 +3,7 @@ import NodeID3 from 'node-id3'
 import multer from 'multer'
 import { existsSync, renameSync, mkdirSync, rmSync, readdirSync, copyFileSync } from 'fs'
 import path from 'path'
-import { getAllArtists, getAllAlbums, getAlbumsByArtist, getAlbumTracks, searchTracks, getLibraryStats, getTracksByStatus, getTracksNeedingLyrics, updateTrackLyrics, getTrackById, updateTrackMetadata, recordPlay, getRecentlyPlayed, getTopArtists, getRandomAlbums } from '../db/index.js'
+import { getAllArtists, getAllAlbums, getAlbumsByArtist, getAlbumTracks, searchTracks, getLibraryStats, getTracksByStatus, getTracksNeedingLyrics, updateTrackLyrics, getTrackById, updateTrackMetadata, recordPlay, getRecentlyPlayed, getTopArtists, getRandomAlbums, getRecentlyAdded, getMostPlayedTracks, searchArtists, deleteTrackFromDb, reorderAlbumTracks } from '../db/index.js'
 import { triggerNavidromeScan } from '../services/navidrome.js'
 import { normalizeLibrary } from '../services/normalizer.js'
 import { fetchLyrics, writeLrcFile } from '../services/lyrics.js'
@@ -292,13 +292,129 @@ router.get('/play-history', (req, res) => {
   res.json({ tracks })
 })
 
+// --- Library Management ---
+
+// Delete track (removes file + DB + playlist refs)
+router.delete('/tracks/:id', (req, res) => {
+  const id = parseInt(req.params.id)
+  const track = deleteTrackFromDb(id)
+  if (!track) {
+    res.status(404).json({ error: 'Track not found' })
+    return
+  }
+  // Delete file from disk
+  if (track.file_path) {
+    const absPath = getAbsolutePath(track.file_path)
+    try {
+      if (existsSync(absPath)) {
+        rmSync(absPath)
+        // Clean up empty parent directories
+        let dir = path.dirname(absPath)
+        while (dir !== MUSIC_DIR && dir !== path.dirname(dir)) {
+          try {
+            const entries = readdirSync(dir)
+            if (entries.length === 0) {
+              rmSync(dir, { recursive: true })
+              dir = path.dirname(dir)
+            } else {
+              break
+            }
+          } catch { break }
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to delete file ${absPath}:`, err)
+    }
+  }
+  // Delete .lrc sidecar file if exists
+  if (track.file_path) {
+    const lrcPath = getAbsolutePath(track.file_path.replace(/\.[^.]+$/, '.lrc'))
+    try { if (existsSync(lrcPath)) rmSync(lrcPath) } catch {}
+  }
+  triggerNavidromeScan()
+  res.json({ success: true })
+})
+
+// Move track to different album
+router.post('/tracks/:id/move', async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { artist, album, album_artist } = req.body
+  if (!artist || !album) {
+    res.status(400).json({ error: 'artist and album required' })
+    return
+  }
+  try {
+    const result = await updateTrackMetadata(id, {
+      artist,
+      album,
+      album_artist: album_artist || artist,
+    })
+    triggerNavidromeScan()
+    res.json({ success: true, track: result })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// Reorder tracks within an album
+router.put('/albums/reorder', (req, res) => {
+  const { artist, album, trackIds } = req.body
+  if (!artist || !album || !Array.isArray(trackIds)) {
+    res.status(400).json({ error: 'artist, album, and trackIds required' })
+    return
+  }
+  reorderAlbumTracks(artist, album, trackIds)
+  triggerNavidromeScan()
+  res.json({ success: true })
+})
+
+// Merge albums (move all tracks from source to target)
+router.post('/albums/merge', async (req, res) => {
+  const { source, target } = req.body
+  if (!source?.artist || !source?.album || !target?.artist || !target?.album) {
+    res.status(400).json({ error: 'source and target with artist/album required' })
+    return
+  }
+  const sourceTracks = getAlbumTracks(source.artist, source.album)
+  let moved = 0
+  for (const track of sourceTracks) {
+    try {
+      await updateTrackMetadata(track.id, {
+        artist: target.artist,
+        album: target.album,
+        album_artist: target.artist,
+      })
+      moved++
+    } catch (err) {
+      console.error(`Failed to move track ${track.id}:`, err)
+    }
+  }
+  triggerNavidromeScan()
+  res.json({ success: true, moved })
+})
+
+// Unified search (artists + albums + tracks)
+router.get('/search', (req, res) => {
+  const q = (req.query.q as string || '').trim()
+  if (!q) {
+    res.json({ artists: [], albums: [], tracks: [] })
+    return
+  }
+  const artists = searchArtists(q, 10)
+  const albums = getAllAlbums(q).slice(0, 10)
+  const tracks = searchTracks(q).filter(t => t.download_status === 'complete').slice(0, 20)
+  res.json({ artists, albums, tracks })
+})
+
 // Homepage data
 router.get('/home', (req, res) => {
   const userId = req.user?.id
   const recentlyPlayed = userId ? getRecentlyPlayed(userId) : []
   const topArtists = userId ? getTopArtists(userId) : []
-  const randomAlbums = getRandomAlbums(6)
-  res.json({ recentlyPlayed, topArtists, randomAlbums })
+  const randomAlbums = getRandomAlbums(9)
+  const recentlyAdded = getRecentlyAdded(20)
+  const mostPlayed = userId ? getMostPlayedTracks(userId, 20) : []
+  res.json({ recentlyPlayed, topArtists, randomAlbums, recentlyAdded, mostPlayed })
 })
 
 export default router

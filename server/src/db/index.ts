@@ -163,6 +163,20 @@ export function searchTracks(query: string): TrackRow[] {
     .all(pattern, pattern, pattern) as TrackRow[]
 }
 
+export function searchArtists(query: string, limit = 10): { artist: string; track_count: number; album_art_url: string }[] {
+  const pattern = `%${query}%`
+  return db.prepare(`
+    SELECT COALESCE(NULLIF(album_artist, ''), artist) as artist,
+           COUNT(*) as track_count,
+           MAX(album_art_url) as album_art_url
+    FROM tracks
+    WHERE (artist LIKE ? OR album_artist LIKE ?) AND download_status = 'complete'
+    GROUP BY COALESCE(NULLIF(album_artist, ''), artist)
+    ORDER BY track_count DESC
+    LIMIT ?
+  `).all(pattern, pattern, limit) as { artist: string; track_count: number; album_art_url: string }[]
+}
+
 export function getAllArtists(): { artist: string; track_count: number }[] {
   return db.prepare("SELECT COALESCE(NULLIF(album_artist, ''), artist) as artist, COUNT(*) as track_count FROM tracks GROUP BY COALESCE(NULLIF(album_artist, ''), artist) ORDER BY artist COLLATE NOCASE")
     .all() as { artist: string; track_count: number }[]
@@ -396,6 +410,34 @@ export function getTopArtists(userId: number, limit = 10): { artist: string; pla
   `).all(userId, limit) as { artist: string; play_count: number }[]
 }
 
+export function getRecentlyAdded(limit = 20): { album: string; artist: string; album_art_url: string; track_id: number }[] {
+  return db.prepare(`
+    SELECT a.album, a.artist, a.album_art_url, a.track_id FROM (
+      SELECT album, COALESCE(NULLIF(album_artist, ''), artist) as artist,
+             MAX(album_art_url) as album_art_url, MIN(id) as track_id,
+             MAX(created_at) as latest
+      FROM tracks
+      WHERE download_status = 'complete' AND album != ''
+      GROUP BY COALESCE(NULLIF(album_artist, ''), artist), album
+      ORDER BY latest DESC
+      LIMIT ?
+    ) a
+    ORDER BY a.latest DESC
+  `).all(limit) as { album: string; artist: string; album_art_url: string; track_id: number }[]
+}
+
+export function getMostPlayedTracks(userId: number, limit = 20): (TrackRow & { play_count: number })[] {
+  return db.prepare(`
+    SELECT t.*, COUNT(*) as play_count
+    FROM play_history ph
+    JOIN tracks t ON t.id = ph.track_id
+    WHERE ph.user_id = ? AND t.download_status = 'complete'
+    GROUP BY ph.track_id
+    ORDER BY play_count DESC
+    LIMIT ?
+  `).all(userId, limit) as (TrackRow & { play_count: number })[]
+}
+
 export function getRandomAlbums(limit = 6): { album: string; artist: string; album_art_url: string }[] {
   return db.prepare(`
     SELECT album, COALESCE(NULLIF(album_artist, ''), artist) as artist, MAX(album_art_url) as album_art_url
@@ -405,6 +447,36 @@ export function getRandomAlbums(limit = 6): { album: string; artist: string; alb
     ORDER BY RANDOM()
     LIMIT ?
   `).all(limit) as { album: string; artist: string; album_art_url: string }[]
+}
+
+// --- Library Management ---
+
+export function deleteTrackFromDb(id: number): TrackRow | undefined {
+  const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(id) as TrackRow | undefined
+  if (!track) return undefined
+  // Remove from all playlists first
+  db.prepare('DELETE FROM playlist_tracks WHERE track_id = ?').run(id)
+  // Remove play history
+  db.prepare('DELETE FROM play_history WHERE track_id = ?').run(id)
+  // Remove track
+  db.prepare('DELETE FROM tracks WHERE id = ?').run(id)
+  return track
+}
+
+export function reorderAlbumTracks(artist: string, album: string, trackIds: number[]): void {
+  const update = db.prepare('UPDATE tracks SET track_number = ?, updated_at = datetime(\'now\') WHERE id = ?')
+  const txn = db.transaction(() => {
+    trackIds.forEach((id, i) => update.run(i + 1, id))
+  })
+  txn()
+}
+
+export function getAlbumTracksByArtistAlbum(artist: string, album: string): TrackRow[] {
+  return db.prepare(`
+    SELECT * FROM tracks
+    WHERE (artist = ? OR album_artist = ?) AND album = ?
+    ORDER BY track_number, title
+  `).all(artist, artist, album) as TrackRow[]
 }
 
 // --- Playlist with user ownership ---

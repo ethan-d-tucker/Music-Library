@@ -4,6 +4,7 @@ import { useAppStore } from '../lib/store.ts'
 import { usePlayerStore } from '../lib/player.ts'
 import { MetadataEditor } from './MetadataEditor.tsx'
 import { AddToPlaylistModal } from './AddToPlaylistModal.tsx'
+import { SwipeableTrackRow } from './SwipeableTrackRow.tsx'
 import {
   getArtists, getAlbumsByArtist, getAlbumTracks, getLibraryStats,
   getAllLibraryAlbums, getAllTracks, searchLibrary,
@@ -333,8 +334,8 @@ function TrackList({ tracks, contextArtist }: { tracks: TrackRow[]; contextArtis
           const isCurrent = currentTrack?.id === t.id
           const canPlay = t.download_status === 'complete'
           return (
+            <SwipeableTrackRow key={t.id} onSwipeRight={() => canPlay && addToQueue(t)} disabled={!canPlay}>
             <div
-              key={t.id}
               className={`flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors group ${
                 isCurrent ? 'bg-[var(--color-accent-dim)]' : 'hover:bg-[var(--color-surface)]'
               } ${!canPlay ? 'opacity-40' : ''}`}
@@ -410,6 +411,7 @@ function TrackList({ tracks, contextArtist }: { tracks: TrackRow[]; contextArtis
                 )}
               </div>
             </div>
+            </SwipeableTrackRow>
           )
         })}
       </div>

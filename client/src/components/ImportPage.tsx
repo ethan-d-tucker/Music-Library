@@ -41,6 +41,7 @@ export function ImportPage() {
   const [importError, setImportError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const setPage = useAppStore((s) => s.setPage)
+  const setSettingsTab = useAppStore((s) => s.setSettingsTab)
   const setBatchJobId = useAppStore((s) => s.setBatchJobId)
 
   // Spotify search
@@ -123,7 +124,7 @@ export function ImportPage() {
     try {
       const { jobId } = await startBatchDownload()
       setBatchJobId(jobId)
-      setPage('downloads')
+      setPage('settings'); setSettingsTab('downloads')
     } catch (err) {
       console.error('Failed to start downloads:', err)
     }
@@ -215,7 +216,7 @@ export function ImportPage() {
           <p className="text-sm text-[var(--color-text-muted)] mb-4">Downloads started — check the Downloads page for progress.</p>
           <div className="flex gap-3">
             <button
-              onClick={() => setPage('downloads')}
+              onClick={() => { setPage('settings'); setSettingsTab('downloads') }}
               className="rounded-lg bg-[var(--color-accent)] px-5 py-2 text-sm font-medium text-white hover:bg-[var(--color-accent-hover)] transition-colors"
             >
               View Downloads

@@ -2,10 +2,9 @@ import { useEffect } from 'react'
 import { useAppStore } from './lib/store.ts'
 import { Layout } from './components/Layout.tsx'
 import { LibraryBrowser } from './components/LibraryBrowser.tsx'
-import { ImportPage } from './components/ImportPage.tsx'
 import { SearchPage } from './components/SearchPage.tsx'
 import { PlaylistsPage } from './components/PlaylistsPage.tsx'
-import { DownloadsPage } from './components/DownloadsPage.tsx'
+import { SettingsPage } from './components/SettingsPage.tsx'
 import { LoginPage } from './components/LoginPage.tsx'
 import { HomePage } from './components/HomePage.tsx'
 import { getMe } from './lib/api.ts'
@@ -47,10 +46,9 @@ export default function App() {
     <Layout>
       {page === 'home' && <HomePage />}
       {page === 'library' && <LibraryBrowser />}
-      {page === 'import' && <ImportPage />}
       {page === 'search' && <SearchPage />}
-      {page === 'downloads' && <DownloadsPage />}
       {page === 'playlists' && <PlaylistsPage />}
+      {page === 'settings' && <SettingsPage />}
     </Layout>
   )
 }
