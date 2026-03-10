@@ -44,6 +44,10 @@ cd client && npm run build  # Production build
 - `client/src/components/PlaylistsPage.tsx` — Playlist management (create, rename, reorder tracks, remove tracks, play/shuffle, batch downloads)
 - `client/src/components/SearchPage.tsx` — YouTube search (videos + playlists) and manual download
 - `client/src/components/DownloadsPage.tsx` — Download management with pending/failed track lists, batch selection, cancel, retry
+- `client/src/components/SettingsPage.tsx` — Settings hub with tabbed sub-pages (Manager, Import, Downloads)
+- `client/src/components/ManagerPage.tsx` — Library manager for browsing/editing/deleting artists, albums, songs, playlists with inline metadata editing, track reordering, and move/delete operations
+- `client/src/components/DraggableList.tsx` — Generic drag-to-reorder list component (touch + mouse support)
+- `client/src/components/SwipeableTrackRow.tsx` — Swipe-right-to-add-to-playlist gesture component for track rows
 
 ## Deezer Integration (FLAC Downloads)
 
@@ -96,8 +100,20 @@ cd client && npm run build  # Production build
   - `server` — SSH into the server laptop
 - Deploy workflow: `git push && deploy` (~15 seconds for client rebuild + service restart)
 - Remote commands on server: `ssh server@192.168.12.254 "<command>"` (can run scripts, nssm, etc.)
-- All services (Navidrome, cloudflared, MusicLibrary) run as Windows services via NSSM (auto-start on boot)
+- All services (Navidrome, cloudflared, MusicLibrary, ADSBTracker) run as Windows services via NSSM (auto-start on boot)
 - Old services on dev machine are stopped and disabled
+
+## ADS-B Tracker (Flight Tracking)
+
+- **Separate project** at `~/Desktop/adsb-client` (dev) / `C:\Users\server\Desktop\adsb-client` (server)
+- Real-time aircraft tracking PWA using OpenSky Network API
+- Express 5 + React 19 + Vite + Tailwind v4 + Leaflet (same stack as music library)
+- Runs on port **3002**, accessible at `https://planes.localmusicoklahoma.store` via Cloudflare Tunnel
+- NSSM service: `ADSBTracker` (auto-start on boot)
+- Push notifications via **ntfy.sh** — alerts when aircraft enter configurable radius around home location
+- SSE for real-time aircraft state updates to the map
+- PWA installable on iPhone (Add to Home Screen in Safari), notifications via ntfy iOS app
+- No database — all state is real-time from OpenSky, settings stored in localStorage
 
 ## Navidrome (Streaming Server)
 
@@ -106,11 +122,11 @@ cd client && npm run build  # Production build
 - Serves the music library folder (`MUSIC_DIR`) — new downloads appear automatically
 - Accessible locally at `http://localhost:4533`
 - Accessible remotely at `https://music.localmusicoklahoma.store` via Cloudflare Tunnel
-- Tunnel config at `~/.cloudflared/config.yml`
+- Tunnel config at `~/.cloudflared/config.yml` (routes: `music.` → Navidrome:4533, `library.` → MusicLibrary:3001, `planes.` → ADSBTracker:3002)
 - Phone access via Arpeggi (iOS, OpenSubsonic) — supports gapless playback, offline downloads, playlists
 - Spotify integration enabled in Navidrome config for artist images (uses same credentials as music library app)
 - Deezer also enabled by default as fallback artist image source (no config needed)
-- Navidrome, cloudflared, and MusicLibrary app all run as Windows services via NSSM
+- Navidrome, cloudflared, MusicLibrary, and ADSBTracker all run as Windows services via NSSM
 - Subsonic API: trigger scan via `GET /rest/startScan.view?u=admin&p=ADMIN&c=music-library&v=1.16.1&f=json`
 - Navidrome reads M3U files from `D:/library/Playlists/` directory for playlists
 - Playlists in Navidrome can be managed directly via its SQLite DB (tables: `playlist`, `playlist_tracks`, `playlist_fields`)
