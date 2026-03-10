@@ -38,9 +38,9 @@ export function Layout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
+    <div className="flex h-[100dvh] flex-col md:flex-row overflow-hidden">
       {/* Desktop sidebar */}
-      <nav className="hidden md:flex md:flex-col w-56 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <nav className="hidden md:flex md:flex-col w-56 flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] p-4 overflow-y-auto">
         <div className="mb-6 flex items-center gap-2">
           <img src="/grumpy-cat.svg" alt="Grumpy Cat" className="w-8 h-8" />
           <h1 className="text-lg font-bold text-[var(--color-text)]">Music Library</h1>
@@ -137,7 +137,7 @@ export function Layout({ children }: { children: ReactNode }) {
       )}
 
       {/* Main content */}
-      <main className={`flex-1 p-4 md:p-6 overflow-auto ${hasPlayer ? 'pb-36 md:pb-20' : 'pb-20 md:pb-6'}`}>{children}</main>
+      <main className={`flex-1 min-h-0 p-4 md:p-6 overflow-y-auto ${hasPlayer ? 'pb-36 md:pb-20' : 'pb-20 md:pb-6'}`}>{children}</main>
 
       {/* Now playing bar — between content and tab bar */}
       {hasPlayer && (
