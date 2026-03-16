@@ -12,7 +12,7 @@
  *   cd server && npx tsx scripts/fix-album-art-aspect.ts --crop-only   # skip web search, just crop
  */
 
-import fs from 'fs'
+import fs, { existsSync } from 'fs'
 import path from 'path'
 import { execSync } from 'child_process'
 import { MUSIC_DIR, FFMPEG_DIR } from '../src/config.js'
@@ -22,8 +22,20 @@ const executeMode = args.includes('--execute')
 const cropOnly = args.includes('--crop-only')
 const musicDir = args.find(a => !a.startsWith('-')) || MUSIC_DIR
 
-const ffprobe = FFMPEG_DIR ? path.join(FFMPEG_DIR, 'ffprobe').replace(/\\/g, '/') : 'ffprobe'
-const ffmpeg = FFMPEG_DIR ? path.join(FFMPEG_DIR, 'ffmpeg').replace(/\\/g, '/') : 'ffmpeg'
+// Resolve ffmpeg/ffprobe — check FFMPEG_DIR from config, then C:\ffmpeg, then PATH
+function findFfBinary(name: string): string {
+  if (FFMPEG_DIR) {
+    const p = path.join(FFMPEG_DIR, name).replace(/\\/g, '/')
+    if (existsSync(p) || existsSync(p + '.exe')) return p
+  }
+  // Check C:\ffmpeg (common manual install location on Windows)
+  const winPath = `C:/ffmpeg/${name}`
+  if (existsSync(winPath + '.exe') || existsSync(winPath)) return winPath
+  return name // fall back to PATH
+}
+
+const ffprobe = findFfBinary('ffprobe')
+const ffmpeg = findFfBinary('ffmpeg')
 
 const USER_AGENT = 'MusicLibraryArtFix/1.0 (local)'
 const ART_PATTERNS = /^(cover|folder|album|front|artwork)\.(jpg|jpeg|png|webp)$/i
