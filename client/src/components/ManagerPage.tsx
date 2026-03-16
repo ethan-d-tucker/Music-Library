@@ -1,14 +1,14 @@
-import { useState, useEffect } from 'react'
-import { Search, ChevronRight, ChevronDown, Trash2, ArrowRight, Pencil, Disc3, User, Music, Loader2, Save, X } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Search, ChevronRight, ChevronDown, Trash2, ArrowRight, Disc3, User, Music, Loader2, X, Upload } from 'lucide-react'
 import {
-  getArtists, getAllLibraryAlbums, getAlbumTracks, getAllTracks, getPlaylists, getPlaylistDetail,
-  deleteTrack, moveTrack, reorderAlbumTracks, updateTrackMetadata,
-  removeTrackFromPlaylist, reorderPlaylistTracks,
-  type TrackRow, type PlaylistWithCount,
+  getArtists, getAllLibraryAlbums, getAlbumTracks, getAllTracks, getAlbumsByArtist,
+  deleteTrack, moveTrack, reorderAlbumTracks, uploadTrackArt,
+  type TrackRow,
 } from '../lib/api.ts'
+import { MetadataEditor } from './MetadataEditor.tsx'
 import { DraggableList } from './DraggableList.tsx'
 
-type ManagerScope = 'artists' | 'albums' | 'songs' | 'playlists'
+type ManagerScope = 'artists' | 'albums' | 'songs'
 type SortMode = 'az' | 'za' | 'tracks' | 'recent'
 
 function useDebounce(value: string, delay: number) {
@@ -96,26 +96,39 @@ function MoveTrackModal({ track, onClose, onMoved }: {
   )
 }
 
-// --- Inline Track Editor ---
+// --- Album Art Upload Button ---
 
-function InlineTrackEditor({ track, onSave, onCancel }: {
-  track: TrackRow; onSave: (fields: { title?: string; track_number?: number }) => void; onCancel: () => void
-}) {
-  const [title, setTitle] = useState(track.title)
-  const [trackNum, setTrackNum] = useState(track.track_number || 0)
+function AlbumArtUpload({ trackId, onUploaded }: { trackId: number; onUploaded: () => void }) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      await uploadTrackArt(trackId, file)
+      onUploaded()
+    } catch (err) {
+      console.error('Art upload failed:', err)
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   return (
-    <div className="flex items-center gap-2 py-1">
-      <input value={String(trackNum)} onChange={e => setTrackNum(parseInt(e.target.value) || 0)} type="number"
-        className="w-12 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs text-center outline-none focus:border-[var(--color-accent)]" />
-      <input value={title} onChange={e => setTitle(e.target.value)}
-        className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-sm outline-none focus:border-[var(--color-accent)]" />
-      <button onClick={() => onSave({
-        title: title !== track.title ? title : undefined,
-        track_number: trackNum !== track.track_number ? trackNum : undefined,
-      })} className="p-1 text-[var(--color-accent)]"><Save size={14} /></button>
-      <button onClick={onCancel} className="p-1 text-[var(--color-text-muted)]"><X size={14} /></button>
-    </div>
+    <>
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={uploading}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-text-muted)] transition-colors disabled:opacity-50"
+      >
+        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+        {uploading ? 'Uploading...' : 'Upload Art'}
+      </button>
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden" />
+    </>
   )
 }
 
@@ -131,7 +144,7 @@ function AlbumsManager() {
   const [tracksLoading, setTracksLoading] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<TrackRow | null>(null)
   const [movingTrack, setMovingTrack] = useState<TrackRow | null>(null)
-  const [editingTrackId, setEditingTrackId] = useState<number | null>(null)
+  const [editingTrack, setEditingTrack] = useState<TrackRow | null>(null)
   const [sortMode, setSortMode] = useState<SortMode>('az')
 
   useEffect(() => {
@@ -168,7 +181,6 @@ function AlbumsManager() {
     getAlbumTracks(expandedAlbum.artist, expandedAlbum.album)
       .then(r => setAlbumTracks(r.tracks))
       .catch(console.error)
-    // Also refresh album list
     getAllLibraryAlbums(debouncedQuery || undefined)
       .then(r => setAlbums(r.albums))
       .catch(console.error)
@@ -186,18 +198,8 @@ function AlbumsManager() {
     await reorderAlbumTracks(expandedAlbum.artist, expandedAlbum.album, newTracks.map(t => t.id))
   }
 
-  async function handleInlineSave(trackId: number, fields: { title?: string; track_number?: number }) {
-    const nonEmpty = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
-    if (Object.keys(nonEmpty).length > 0) {
-      await updateTrackMetadata(trackId, nonEmpty)
-      refreshAlbumTracks()
-    }
-    setEditingTrackId(null)
-  }
-
   return (
     <div>
-      {/* Filter + Sort */}
       <div className="flex gap-2 mb-4">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
@@ -243,9 +245,30 @@ function AlbumsManager() {
                   {isExpanded ? <ChevronDown size={16} className="text-[var(--color-text-muted)]" /> : <ChevronRight size={16} className="text-[var(--color-text-muted)]" />}
                 </button>
 
-                {/* Expanded track list with drag-to-reorder */}
                 {isExpanded && (
                   <div className="ml-4 mr-2 mt-1 mb-3 border-l-2 border-[var(--color-border)] pl-3">
+                    {/* Album header with art upload */}
+                    <div className="flex items-center gap-3 mb-2 py-2">
+                      <div className="w-16 h-16 rounded-lg bg-[var(--color-surface-2)] overflow-hidden flex-shrink-0">
+                        {a.album_art_url ? (
+                          <img src={a.album_art_url} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Disc3 size={24} className="text-[var(--color-text-muted)]" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{a.album}</p>
+                        <p className="text-xs text-[var(--color-text-muted)] truncate">{a.artist}</p>
+                        <div className="mt-1.5">
+                          {albumTracks.length > 0 && (
+                            <AlbumArtUpload trackId={albumTracks[0].id} onUploaded={refreshAlbumTracks} />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
                     {tracksLoading ? (
                       <p className="text-xs text-[var(--color-text-muted)] py-2">Loading tracks...</p>
                     ) : (
@@ -253,15 +276,12 @@ function AlbumsManager() {
                         items={albumTracks}
                         keyExtractor={t => t.id}
                         onReorder={handleReorder}
-                        renderItem={(t, _i, _isDragging) => (
-                          editingTrackId === t.id ? (
-                            <InlineTrackEditor
-                              track={t}
-                              onSave={(fields) => handleInlineSave(t.id, fields)}
-                              onCancel={() => setEditingTrackId(null)}
-                            />
-                          ) : (
-                            <div className="flex items-center gap-2 py-1.5 group">
+                        renderItem={(t) => (
+                          <div className="flex items-center gap-2 py-1.5 group">
+                            <button
+                              onClick={() => setEditingTrack(t)}
+                              className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-[var(--color-accent)] transition-colors"
+                            >
                               <span className="w-6 text-xs text-[var(--color-text-muted)] text-center flex-shrink-0">
                                 {t.track_number || '-'}
                               </span>
@@ -269,22 +289,18 @@ function AlbumsManager() {
                                 <p className="text-sm truncate">{t.title}</p>
                                 <p className="text-xs text-[var(--color-text-muted)] truncate">{t.artist}</p>
                               </div>
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => setEditingTrackId(t.id)} title="Edit"
-                                  className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-                                  <Pencil size={12} />
-                                </button>
-                                <button onClick={() => setMovingTrack(t)} title="Move to album"
-                                  className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-                                  <ArrowRight size={12} />
-                                </button>
-                                <button onClick={() => setConfirmDelete(t)} title="Delete"
-                                  className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]">
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
+                            </button>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={(e) => { e.stopPropagation(); setMovingTrack(t) }} title="Move to album"
+                                className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                                <ArrowRight size={12} />
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(t) }} title="Delete"
+                                className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]">
+                                <Trash2 size={12} />
+                              </button>
                             </div>
-                          )
+                          </div>
                         )}
                       />
                     )}
@@ -294,6 +310,14 @@ function AlbumsManager() {
             )
           })}
         </div>
+      )}
+
+      {editingTrack && (
+        <MetadataEditor
+          track={editingTrack}
+          onClose={() => setEditingTrack(null)}
+          onSaved={() => { setEditingTrack(null); refreshAlbumTracks() }}
+        />
       )}
 
       {confirmDelete && (
@@ -322,6 +346,15 @@ function ArtistsManager() {
   const [loading, setLoading] = useState(true)
   const [filterQuery, setFilterQuery] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('az')
+  const [expandedArtist, setExpandedArtist] = useState<string | null>(null)
+  const [artistAlbums, setArtistAlbums] = useState<{ album: string; track_count: number; album_art_url: string }[]>([])
+  const [albumsLoading, setAlbumsLoading] = useState(false)
+  const [expandedAlbum, setExpandedAlbum] = useState<string | null>(null)
+  const [albumTracks, setAlbumTracks] = useState<TrackRow[]>([])
+  const [tracksLoading, setTracksLoading] = useState(false)
+  const [editingTrack, setEditingTrack] = useState<TrackRow | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<TrackRow | null>(null)
+  const [movingTrack, setMovingTrack] = useState<TrackRow | null>(null)
 
   useEffect(() => {
     getArtists().then(r => { setArtists(r.artists); setLoading(false) }).catch(console.error)
@@ -337,6 +370,46 @@ function ArtistsManager() {
     if (sortMode === 'tracks') return b.track_count - a.track_count
     return 0
   })
+
+  function toggleArtist(artist: string) {
+    if (expandedArtist === artist) {
+      setExpandedArtist(null)
+      setExpandedAlbum(null)
+      return
+    }
+    setExpandedArtist(artist)
+    setExpandedAlbum(null)
+    setAlbumsLoading(true)
+    getAlbumsByArtist(artist)
+      .then(r => { setArtistAlbums(r.albums); setAlbumsLoading(false) })
+      .catch(console.error)
+  }
+
+  function toggleAlbum(artist: string, album: string) {
+    if (expandedAlbum === album) {
+      setExpandedAlbum(null)
+      return
+    }
+    setExpandedAlbum(album)
+    setTracksLoading(true)
+    getAlbumTracks(artist, album)
+      .then(r => { setAlbumTracks(r.tracks); setTracksLoading(false) })
+      .catch(console.error)
+  }
+
+  function refreshTracks() {
+    if (!expandedArtist || !expandedAlbum) return
+    getAlbumTracks(expandedArtist, expandedAlbum)
+      .then(r => setAlbumTracks(r.tracks))
+      .catch(console.error)
+  }
+
+  async function handleDeleteTrack(track: TrackRow) {
+    await deleteTrack(track.id)
+    setConfirmDelete(null)
+    refreshTracks()
+    getArtists().then(r => setArtists(r.artists)).catch(console.error)
+  }
 
   return (
     <div>
@@ -364,17 +437,129 @@ function ArtistsManager() {
       ) : (
         <div className="space-y-0.5">
           {sorted.map(a => (
-            <div key={a.artist} className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-[var(--color-surface)] transition-colors">
-              <div className="w-10 h-10 rounded-full bg-[var(--color-surface-2)] flex items-center justify-center flex-shrink-0">
-                <User size={16} className="text-[var(--color-text-muted)]" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{a.artist}</p>
-                <p className="text-xs text-[var(--color-text-muted)]">{a.track_count} tracks</p>
-              </div>
+            <div key={a.artist}>
+              <button
+                onClick={() => toggleArtist(a.artist)}
+                className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-[var(--color-surface)] transition-colors text-left"
+              >
+                <div className="w-10 h-10 rounded-full bg-[var(--color-surface-2)] flex items-center justify-center flex-shrink-0">
+                  <User size={16} className="text-[var(--color-text-muted)]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{a.artist}</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">{a.track_count} tracks</p>
+                </div>
+                {expandedArtist === a.artist
+                  ? <ChevronDown size={16} className="text-[var(--color-text-muted)]" />
+                  : <ChevronRight size={16} className="text-[var(--color-text-muted)]" />
+                }
+              </button>
+
+              {expandedArtist === a.artist && (
+                <div className="ml-4 mr-2 mt-1 mb-3 border-l-2 border-[var(--color-border)] pl-3">
+                  {albumsLoading ? (
+                    <p className="text-xs text-[var(--color-text-muted)] py-2">Loading albums...</p>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {artistAlbums.map(alb => (
+                        <div key={alb.album}>
+                          <button
+                            onClick={() => toggleAlbum(a.artist, alb.album)}
+                            className="w-full flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[var(--color-surface)] transition-colors text-left"
+                          >
+                            {alb.album_art_url ? (
+                              <img src={alb.album_art_url} alt="" className="w-8 h-8 rounded object-cover flex-shrink-0" />
+                            ) : (
+                              <div className="w-8 h-8 rounded bg-[var(--color-surface-2)] flex items-center justify-center flex-shrink-0">
+                                <Disc3 size={12} className="text-[var(--color-text-muted)]" />
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm truncate">{alb.album}</p>
+                              <p className="text-xs text-[var(--color-text-muted)]">{alb.track_count} tracks</p>
+                            </div>
+                            {expandedAlbum === alb.album
+                              ? <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
+                              : <ChevronRight size={14} className="text-[var(--color-text-muted)]" />
+                            }
+                          </button>
+
+                          {expandedAlbum === alb.album && (
+                            <div className="ml-3 border-l-2 border-[var(--color-border)] pl-3 mt-1 mb-2">
+                              {/* Album art upload */}
+                              <div className="flex items-center gap-2 mb-2">
+                                {albumTracks.length > 0 && (
+                                  <AlbumArtUpload trackId={albumTracks[0].id} onUploaded={refreshTracks} />
+                                )}
+                              </div>
+
+                              {tracksLoading ? (
+                                <p className="text-xs text-[var(--color-text-muted)] py-2">Loading tracks...</p>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  {albumTracks.map(t => (
+                                    <div key={t.id} className="flex items-center gap-2 py-1.5 group">
+                                      <button
+                                        onClick={() => setEditingTrack(t)}
+                                        className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-[var(--color-accent)] transition-colors"
+                                      >
+                                        <span className="w-5 text-xs text-[var(--color-text-muted)] text-center flex-shrink-0">
+                                          {t.track_number || '-'}
+                                        </span>
+                                        <p className="text-sm truncate flex-1">{t.title}</p>
+                                      </button>
+                                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => setMovingTrack(t)} title="Move"
+                                          className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                                          <ArrowRight size={12} />
+                                        </button>
+                                        <button onClick={() => setConfirmDelete(t)} title="Delete"
+                                          className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-danger)]">
+                                          <Trash2 size={12} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {artistAlbums.length === 0 && (
+                        <p className="text-xs text-[var(--color-text-muted)] py-2">No albums found</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
+      )}
+
+      {editingTrack && (
+        <MetadataEditor
+          track={editingTrack}
+          onClose={() => setEditingTrack(null)}
+          onSaved={() => { setEditingTrack(null); refreshTracks() }}
+        />
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          message={`Delete "${confirmDelete.title}" by ${confirmDelete.artist}?`}
+          onConfirm={() => handleDeleteTrack(confirmDelete)}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {movingTrack && (
+        <MoveTrackModal
+          track={movingTrack}
+          onClose={() => setMovingTrack(null)}
+          onMoved={() => { refreshTracks(); getArtists().then(r => setArtists(r.artists)).catch(console.error) }}
+        />
       )}
     </div>
   )
@@ -390,11 +575,16 @@ function SongsManager() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<TrackRow | null>(null)
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false)
+  const [editingTrack, setEditingTrack] = useState<TrackRow | null>(null)
 
   useEffect(() => {
     setLoading(true)
     getAllTracks().then(r => { setTracks(r.tracks); setLoading(false) }).catch(console.error)
   }, [])
+
+  function refreshTracks() {
+    getAllTracks().then(r => setTracks(r.tracks)).catch(console.error)
+  }
 
   const filtered = tracks.filter(t => {
     if (!debouncedQuery) return true
@@ -448,7 +638,6 @@ function SongsManager() {
         </div>
       </div>
 
-      {/* Batch actions */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 mb-3 p-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)]">
           <span className="text-sm text-[var(--color-text-muted)]">{selected.size} selected</span>
@@ -491,11 +680,16 @@ function SongsManager() {
                   onChange={() => toggleSelect(t.id)}
                   className="rounded accent-[var(--color-accent)] flex-shrink-0"
                 />
-                <img src={`/api/stream/art/${t.id}`} alt="" className="w-8 h-8 rounded object-cover bg-[var(--color-surface-2)] flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm truncate">{t.title}</p>
-                  <p className="text-xs text-[var(--color-text-muted)] truncate">{t.artist} &middot; {t.album}</p>
-                </div>
+                <button
+                  onClick={() => setEditingTrack(t)}
+                  className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-[var(--color-accent)] transition-colors"
+                >
+                  <img src={`/api/stream/art/${t.id}`} alt="" className="w-8 h-8 rounded object-cover bg-[var(--color-surface-2)] flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{t.title}</p>
+                    <p className="text-xs text-[var(--color-text-muted)] truncate">{t.artist} &middot; {t.album}</p>
+                  </div>
+                </button>
                 <button
                   onClick={() => setConfirmDelete(t)}
                   className="p-1 text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] transition-all flex-shrink-0"
@@ -506,6 +700,14 @@ function SongsManager() {
             ))}
           </div>
         </div>
+      )}
+
+      {editingTrack && (
+        <MetadataEditor
+          track={editingTrack}
+          onClose={() => setEditingTrack(null)}
+          onSaved={() => { setEditingTrack(null); refreshTracks() }}
+        />
       )}
 
       {confirmDelete && (
@@ -527,98 +729,6 @@ function SongsManager() {
   )
 }
 
-// --- Playlists Manager ---
-
-function PlaylistsManager() {
-  const [playlists, setPlaylists] = useState<PlaylistWithCount[]>([])
-  const [loading, setLoading] = useState(true)
-  const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [playlistTracks, setPlaylistTracks] = useState<TrackRow[]>([])
-  const [tracksLoading, setTracksLoading] = useState(false)
-
-  useEffect(() => {
-    getPlaylists().then(r => { setPlaylists(r.playlists); setLoading(false) }).catch(console.error)
-  }, [])
-
-  function loadPlaylistTracks(id: number) {
-    if (expandedId === id) { setExpandedId(null); return }
-    setExpandedId(id)
-    setTracksLoading(true)
-    getPlaylistDetail(id)
-      .then(r => { setPlaylistTracks(r.tracks); setTracksLoading(false) })
-      .catch(console.error)
-  }
-
-  async function handleRemoveTrack(trackId: number) {
-    if (!expandedId) return
-    await removeTrackFromPlaylist(expandedId, trackId)
-    setPlaylistTracks(prev => prev.filter(t => t.id !== trackId))
-  }
-
-  async function handleReorder(newTracks: TrackRow[]) {
-    if (!expandedId) return
-    setPlaylistTracks(newTracks)
-    await reorderPlaylistTracks(expandedId, newTracks.map(t => t.id))
-  }
-
-  return (
-    <div>
-      {loading ? (
-        <p className="text-[var(--color-text-muted)]">Loading...</p>
-      ) : (
-        <div className="space-y-1">
-          {playlists.map(p => (
-            <div key={p.id}>
-              <button
-                onClick={() => loadPlaylistTracks(p.id)}
-                className="w-full flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-[var(--color-surface)] transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-surface-2)] flex items-center justify-center flex-shrink-0">
-                  <Music size={16} className="text-white/80" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{p.name}</p>
-                  <p className="text-xs text-[var(--color-text-muted)]">{p.trackCount} tracks</p>
-                </div>
-                {expandedId === p.id ? <ChevronDown size={16} className="text-[var(--color-text-muted)]" /> : <ChevronRight size={16} className="text-[var(--color-text-muted)]" />}
-              </button>
-
-              {expandedId === p.id && (
-                <div className="ml-4 mr-2 mt-1 mb-3 border-l-2 border-[var(--color-border)] pl-3">
-                  {tracksLoading ? (
-                    <p className="text-xs text-[var(--color-text-muted)] py-2">Loading...</p>
-                  ) : (
-                    <DraggableList
-                      items={playlistTracks}
-                      keyExtractor={t => t.id}
-                      onReorder={handleReorder}
-                      renderItem={(t) => (
-                        <div className="flex items-center gap-2 py-1.5 group">
-                          <img src={`/api/stream/art/${t.id}`} alt="" className="w-8 h-8 rounded object-cover bg-[var(--color-surface-2)] flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm truncate">{t.title}</p>
-                            <p className="text-xs text-[var(--color-text-muted)] truncate">{t.artist}</p>
-                          </div>
-                          <button
-                            onClick={() => handleRemoveTrack(t.id)}
-                            className="p-1 text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-danger)] transition-all"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      )}
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // --- Main Manager Page ---
 
 export function ManagerPage() {
@@ -626,13 +736,14 @@ export function ManagerPage() {
 
   return (
     <div>
+      <h1 className="text-xl font-bold mb-4">Library</h1>
+
       {/* Scope selector */}
       <div className="flex gap-2 mb-4 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
         {([
           { key: 'artists', label: 'Artists', icon: User },
           { key: 'albums', label: 'Albums', icon: Disc3 },
           { key: 'songs', label: 'Songs', icon: Music },
-          { key: 'playlists', label: 'Playlists', icon: Music },
         ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -652,7 +763,6 @@ export function ManagerPage() {
       {scope === 'artists' && <ArtistsManager />}
       {scope === 'albums' && <AlbumsManager />}
       {scope === 'songs' && <SongsManager />}
-      {scope === 'playlists' && <PlaylistsManager />}
     </div>
   )
 }

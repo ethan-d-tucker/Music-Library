@@ -1,12 +1,12 @@
 import { useEffect } from 'react'
 import { useAppStore } from './lib/store.ts'
 import { Layout } from './components/Layout.tsx'
-import { LibraryBrowser } from './components/LibraryBrowser.tsx'
-import { SearchPage } from './components/SearchPage.tsx'
-import { PlaylistsPage } from './components/PlaylistsPage.tsx'
-import { SettingsPage } from './components/SettingsPage.tsx'
-import { LoginPage } from './components/LoginPage.tsx'
 import { HomePage } from './components/HomePage.tsx'
+import { ManagerPage } from './components/ManagerPage.tsx'
+import { DownloadsPage } from './components/DownloadsPage.tsx'
+import { ImportPage } from './components/ImportPage.tsx'
+import { PlaylistsPage } from './components/PlaylistsPage.tsx'
+import { LoginPage } from './components/LoginPage.tsx'
 import { getMe } from './lib/api.ts'
 
 export default function App() {
@@ -45,10 +45,10 @@ export default function App() {
   return (
     <Layout>
       {page === 'home' && <HomePage />}
-      {page === 'library' && <LibraryBrowser />}
-      {page === 'search' && <SearchPage />}
+      {page === 'library' && <ManagerPage />}
+      {page === 'downloads' && <DownloadsPage />}
+      {page === 'import' && <ImportPage />}
       {page === 'playlists' && <PlaylistsPage />}
-      {page === 'settings' && <SettingsPage />}
     </Layout>
   )
 }
